@@ -2,7 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover puts the page under the status bar and the gesture bar, which is what
+         Android 15 does to every app whether it asks or not; it is also the only way env(safe-area-*)
+         reports anything but zero, and the chrome pads itself with those. interactive-widget makes
+         the on-screen keyboard shrink the layout viewport rather than covering it, so 100dvh, a
+         centred dialog and a modal's max-height all mean the part of the screen still visible. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#0b0e12" />
     <!-- /icon.svg is the mark itself, and is also what other sites embed - see the README. The

@@ -339,6 +339,14 @@ the syntax tree and applies decorations - line classes for headings, quotes and 
 classes for emphasis and code, and replace decorations that hide markup on inactive lines. Two things
 to know before changing it:
 
+- **A blank line inside a selection is painted by the editor, not the browser.** The browser paints a
+  selection onto text and a blank line has none, so dragging across one left a gap that read as "this
+  line was not selected" - when in fact its line break was, and would be cut or copied with the rest.
+  `livePreview` gives such a line `.cm-md-blank-selected`, whose style paints the width of a space:
+  a gradient rather than a width, because what is being coloured is the line's own element, and that
+  is as wide as the pane whatever is on it. The colour is `--selection`, which the browser's own
+  painting reads too, so a selection cannot end up two different colours. Blank lines are walked line
+  by line rather than taken from the syntax tree, because a line with nothing on it is not a node.
 - **Mount the editor with `key={noteId}`.** That rebuilds it per note, which resets the undo history.
   Without it, undo in one note reaches back into another note's text.
 - **The markdown language is assembled by hand** in `components/markdownLanguage.ts` from
@@ -445,6 +453,182 @@ highlighted by that language's own parser, nested into the same syntax tree by `
   (heading, strong, emphasis, link, list, quote). Prose is styled by `livePreview` through its own
   classes; colouring it from the highlight style as well means two things fighting over the same
   text.
+
+### Tables
+
+A table is drawn as a table. The markdown is taken out of the flow and replaced by a real `<table>`
+whose cells are editable in place, columns as wide as what is in them, rows draggable to reorder -
+and a "Text" button on it that puts the markdown back when somebody wants to see it. Styling the
+source until it looked table-ish was the first attempt, and it could never do the two things that
+make a table a table rather than a paragraph with pipes in it: a column that fits its contents, and a
+cell you can point at.
+
+Six files, in the order the work flows through them:
+
+| File | What |
+| --- | --- |
+| `tableFormat.ts` | The text: reading a table out of markdown, changing the model, writing it back laid out. Knows nothing about CodeMirror. |
+| `tableState.ts` | The two things that are a view of a note rather than part of it - which tables are showing their markdown, and which cell is being edited. |
+| `tableView.ts` | The state field that decides which tables are drawn. |
+| `tableWidget.ts` | The drawn table itself: the DOM, the editable cells, the buttons, the drag. |
+| `tables.ts` | Every command, written in terms of the model. |
+| `tableControls.ts` | The one floating button that gets you back from the markdown to the table. |
+
+**The source is laid out, not just rendered.** `| a | b |` and `| c | ddddddd |` renders correctly and
+is unreadable in a plain editor, in a diff, in an exported archive, and on the FUSE mount when there
+is one. `renderTable` pads every column to its widest cell and draws the delimiter row to match,
+following the column's alignment, so a right-aligned column of numbers reads as one in the source
+too. Padding is counted in **display columns**, not characters: a CJK character or an emoji takes two
+columns of a monospace grid and counts as one character - or as several, for an emoji built from
+joined code points, which `Intl.Segmenter` puts back together. Getting that wrong is not a rounding
+error, it is a table whose sides do not line up for anybody writing in a language nobody tested.
+
+**Laying out a laid-out table has to change nothing.** Every edit to a drawn table writes the whole
+thing back, so a layout that was not a fixed point would leave a note permanently unsaved. There is a
+test.
+
+**Every command replaces the whole table.** Read it out, change the model, write it back rendered -
+which is why adding a column and tidying the layout are one code path, and why no command can leave a
+row with the wrong number of pipes in it. Nothing is dropped to tidy something up: a body row with
+more cells than the header widens the header rather than losing the cell, and a table keeps its header
+row and its last column, because a table without them cannot be written down at all.
+
+#### What the widget has to get right
+
+- **It is a block replace decoration, so it comes from a state field, not a view plugin.** A
+  decoration that changes the block structure of the document is not allowed to come from a plugin,
+  because a plugin only sees the viewport and the editor needs the heights of everything to know what
+  the viewport is. The cost is working over the whole document; it is paid only when something
+  changed - an edit, the text button, or **the parser reaching further into a long note than it had
+  before**. That last one is the easy one to forget, and it shows up as a table further down a note
+  that never becomes one.
+- **The cells are `contenteditable` islands, not part of the editor's document.** CodeMirror's cursor
+  is never inside a drawn table. That is what lets a cell answer for its own Enter and Tab, and it is
+  why `tableState.ts` has to remember which cell is being edited: `activeTable` asks it first and
+  falls back to the cursor, which is what makes one set of commands serve the drawn table and the
+  markdown behind it. It is also why `write` does not move the cursor for a drawn table - that would
+  put it inside a range nobody can see.
+- **This works because CodeMirror keeps out of it.** `ignoreEvent` returns true for everything, and
+  CodeMirror's own `mayControlSelection` declines to move the DOM selection while the active element
+  is inside the content but is not the content - which is exactly a focused cell. The consequence to
+  remember: **CodeMirror does not deliver events it has been told to ignore**, so the context menu is
+  opened from a React handler on `.editor-surface` rather than through `EditorView.domEventHandlers`.
+  A right-click on a table cell is precisely such an event.
+- **What is typed is written back debounced, at 300ms.** Not on blur alone: the autosave runs on its
+  own clock, and a note closed mid-cell would lose what was in it. Not per keystroke either, because
+  every write re-renders the whole table.
+- **The table is never stretched to fill the pane.** The widget is `max-content` wide, capped at the
+  pane, and the table inside it takes exactly the width its columns need; when that is more than there
+  is room for, the card shrinks and the table scrolls inside it. Making the table `min-width: 100%`
+  instead - so a narrow one did not leave a gap where the card should be - meant the surplus had to be
+  given to some column, and the browser gave nearly all of it to whichever column held the most text.
+  That column then grew every time somebody typed in its heading, and because the editable box inside
+  the cell keeps its own 22rem cap, the column grew out from under it and left a dead strip that
+  looked like part of the cell and could not be clicked into. The cell now focuses its box when
+  anything in it is clicked, which is the belt to that braces.
+- **The widget is spaced with padding, never margin.** The editor measures a block widget with
+  `getBoundingClientRect`, which does not include margins - so a margin on `.cm-table` is space on the
+  screen the editor does not know about, and every line below the table sits that much lower than the
+  editor thinks it does. Nothing about that is cosmetic: clicking, dragging out a selection and
+  arrowing up and down all go through the editor's idea of where the lines are. A 0.7rem margin top
+  and bottom meant clicking about 22px above the text you wanted, per table above it - and arrowing up
+  jumping to a table rather than to the previous line, because the position it computed was inside the
+  range the widget had replaced, where there is no line and no caret to draw. For the same reason the
+  `ResizeObserver` reads `borderBoxSize` rather than `contentRect`: what is being estimated is the box
+  the editor will measure.
+- **The widget must answer `estimatedHeight` honestly.** Every keystroke in a cell rewrites the whole
+  table, and rewriting the text a block widget stands in for throws away the height the editor had
+  measured - so the estimate is what the height map uses until the next measure pass. The default
+  estimate is "no idea", which the editor reads as one line: a ten-row table collapsed to a line in
+  the height map, the document lost several hundred pixels, the scroll position was adjusted to suit,
+  and then it all came back. That was the view snapping about while somebody typed, and it was worse
+  the taller the table and the further down the note. A `ResizeObserver` keeps the real height - cells
+  that wrapped included - and `updateDOM` carries it across when a table slides down the note, because
+  a resize observer says nothing about something that moved without changing size.
+- **`updateDOM` patches instead of rebuilding whenever the shape is unchanged**, and never touches the
+  cell that has focus. Rebuilding would take the caret out of the cell being typed in on every
+  keystroke, which is the whole game. It also means the DOM's event handlers outlive the widget that
+  made them, so **nothing in the widget captures the table's position** - it is read off the DOM
+  (`data-from`), and a table that slid down the note because something was typed above it keeps
+  working without being drawn again.
+- **The buttons on a table deliberately do not `preventDefault` on mousedown**, unlike every other
+  floating control in the editor. Taking focus is what makes the cell being typed in blur, and
+  blurring is what writes it into the note - so a button pressed a moment after typing acts on the
+  text that was just typed. The drag handle cannot do that, because its default is a text selection,
+  so it blurs the active element itself instead.
+- **Leaving a cell puts the editor's cursor at the table first.** It could be anywhere - wherever it
+  was when somebody clicked into a cell, possibly pages away - and focusing the editor scrolls to it.
+- **Anything that changes a table's shape asks for the caret** through `focusCellAfterRender`, because
+  the element it wants to focus does not exist yet. That is a module-level variable rather than more
+  editor state for the same reason the file tree's drag payload is: it is read once, immediately, by
+  the render that the change itself caused, and would be stale a moment later.
+- **Reordering is pointer events, not HTML5 drag and drop**, which does not exist on a touchscreen. A
+  table only reorderable with a mouse is one that half the people using this app cannot reorder.
+  `setPointerCapture` keeps the drag alive once the finger leaves the handle; `touch-action: none`
+  stops the page scrolling underneath it instead. The handles get a **lane of their own**: `--grip`
+  on `.cm-table` insets the whole first column, header included, and positions the handle inside that
+  inset. One value for both, because when they were set separately the handles were drawn on top of
+  the first thing every row said.
+- **Cells escape and unescape at the boundary.** The model holds what markdown holds, so a `|` in
+  someone's prose is a backslash-pipe in the model and a plain `|` in the cell. A line break cannot be
+  represented in a cell at all, so a pasted paragraph becomes one line rather than being refused -
+  what was pasted is still there, and the person who pasted it can see what it did.
+
+#### Showing the markdown
+
+The button on a table turns it back into text, one table at a time, remembered in `tableState.ts` and
+carried through every edit so a table that moved is still the same table. There is deliberately **no**
+"shows its source while the cursor is in it" rule, which is how the rest of the live preview works: a
+drawn table's cells are their own editable islands, so the cursor is never inside one, and a rule that
+could only fire while somebody was hand-typing a table would be a rule almost nobody would ever see.
+
+A table shown as markdown is styled by the `.cm-md-table` rules in `MarkdownEditor.tsx` - a monospace
+band, the header emboldened, the `|---|` row kept but drawn faint because it is what somebody edits to
+change an alignment by hand. The band is **as wide as what is in it**, and unlike a code block's card
+that needs no measuring pass: the lines are monospace and `renderTable` has already padded every one
+of them to the same number of columns, so `ch` turns that count straight into a width. `livePreview`
+gives every line of the table the widest one, which keeps the sides straight even part-way through
+typing a row that is longer than the rest. Tab and Shift-Tab move between its cells, and `FormatOnLeave` lays it out
+again when the cursor leaves it, on a microtask, because a transaction cannot go out from inside an
+update. Its one floating control is the way back, and it sits at the **bottom right of the band** - which is
+where the button that sent you there was. The "Text" button in a drawn table's footer and the "Table"
+button over its markdown are one control in its two states, and a control that moved across the screen
+when it was pressed would be two controls. They share a rule in `index.css` for the same reason. Not
+the top right, where a code block's copy button goes: a code block's opening fence line is empty once
+its backticks are hidden, and a table's first line is its header row with writing on it. The button
+measures the *line's* right edge rather than the pane's, as the copy button does now that a card is
+only as wide as it needs to be.
+
+The icons in both are built out of elements rather than JSX, because they live in CodeMirror's DOM
+rather than React's. `components/domIcons.ts` is the one copy of them, and each is the twin of the
+component of the same name in `Icons.tsx`.
+
+### The editor's context menu
+
+`components/ContextMenu.tsx` is the menu the file tree has always had, moved out of `NoteTree.tsx` so
+the editor can open the same object: same looks, same ways out, same nudge back inside the window near
+an edge. Two menus that behaved slightly differently would be two menus to learn.
+
+`editorMenu.tsx` says what is in it - cut, copy and paste, then everything about the table the cursor
+or the edited cell is in, and "Insert table" when there is neither.
+
+- **Cut and copy and paste are here because a note in a web view does not reliably have them.** Cut
+  copies first and deletes only if that worked: a cut that could not reach the clipboard and deleted
+  the text anyway is the one outcome here that loses something unrecoverable. Paste cannot fall back
+  on `execCommand` the way copy can - reading the clipboard was removed from it deliberately - so when
+  the browser refuses, it says so and points at Ctrl-V rather than doing nothing.
+- **It opens on a long press as well as a right-click.** Android fires `contextmenu` on a long press
+  and desktop fires it on a right-click; iOS fires neither, so there is a 500ms timer that abandons
+  the moment the finger moves more than a few pixels - a drag is a scroll or a selection, and taking
+  either of those to make a menu work would be a bad trade.
+- **Opening it moves the cursor to what was clicked**, unless the click was inside the selection (in
+  which case the selection is left alone - cutting the thing you just selected is the point of the
+  menu) or inside a drawn table (in which case the cell already said which table this is about). That
+  move can itself take the cursor out of a table shown as markdown and set off the layout above it, so
+  every command reads the selection again when it runs rather than using the offsets the menu was
+  built from.
+- **A command that does not apply is shown disabled with a reason**, never left out. A menu whose
+  items move about between openings is one nobody can learn.
 
 ### Sync
 
@@ -743,6 +927,30 @@ Two rules that matter more than coverage numbers:
   combining marks, content that is itself a diff, content containing conflict markers. Add a shape
   when you find one that breaks something; the corpus is the institutional memory.
 
+### The client's own tests
+
+`SerbleNotes.App/tests/` holds the few pieces of the client that can be wrong rather than broken -
+today, the markdown table layout, which rewrites the user's text and whose bugs save a table with a
+cell missing rather than failing. Everything else in the client is a button that either works or
+visibly does not.
+
+```fish
+cd SerbleNotes.App; npm test
+```
+
+No test framework was added for it: node's own runner and its TypeScript transform, so the client's
+dependency list is unchanged. Two things make that work and are worth knowing before adding a file:
+
+- **`--experimental-transform-types`, not `--experimental-strip-types`.** The plugin classes in the
+  editor use TypeScript parameter properties (`constructor(private readonly view: EditorView)`),
+  which strip-only mode refuses outright.
+- **`tests/support/hooks.mjs` puts the `.ts` back on relative imports.** The app is bundled by Vite,
+  so `src/` writes `from './tableFormat'` with no extension, and node will not guess. The alternative
+  was two import styles inside one directory.
+
+The directory is outside `tsconfig.json`'s `include`, so `tsc` does not typecheck it - which is what
+lets a test import `node:test` without `@types/node` being a dependency of the client.
+
 ## Backend code style
 
 Match `../SerbleFiles/SerbleFiles.Backend` - it is the style reference, not a dependency. Concretely:
@@ -797,6 +1005,7 @@ cd SerbleNotes.App; npm run build:core          # wasm-pack -> SerbleNotes.Core/
 
 # Web client. Dev uses Vite on :3000 proxying /api (and the socket) to the backend on :5179.
 cd SerbleNotes.App; npm run dev
+cd SerbleNotes.App; npm test                    # node's own runner over SerbleNotes.App/tests
 cd SerbleNotes.App; npm run build               # -> SerbleNotes.Backend/wwwroot
 cd SerbleNotes.App; npm run build:app           # -> SerbleNotes.App/dist, what Tauri bundles
 

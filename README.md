@@ -62,6 +62,15 @@ every note, and the server storing it all only ever holds ciphertext.
 - **No modes.** Markdown renders in place as you type; the line the cursor is on shows its raw
   syntax, every other line shows the result.
 - **Code blocks are highlighted by that language's own parser**, loaded on demand.
+- **Tables are drawn as tables.** Real cells you click into and type in, columns as wide as what is
+  in them, a button on each edge to add a row or a column, and a handle to drag a row somewhere else.
+  Tab crosses the row, Enter goes down the column and makes a new row at the bottom.
+- **A "Text" button on every table** shows the markdown behind it, and puts it back.
+- **A table's source is laid out, not just rendered.** Columns are padded to a common width, counted
+  in display columns so CJK and emoji still line up, so a note reads as a table in a plain text
+  editor, in a diff, and in an exported archive.
+- **Right-click, or hold on a touchscreen**, for cut, copy, paste and everything about the table
+  under the pointer - rows, columns, alignment, reordering.
 - **Autosave is debounced**, and the sidebar, editor and panels all sit behind draggable splitters.
 
 ## Sync

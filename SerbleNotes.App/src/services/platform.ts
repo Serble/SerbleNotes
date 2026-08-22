@@ -14,64 +14,24 @@ export function isNative(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-const SERVER_KEY = 'serblenotes.serverUrl';
-
-/** Compiled in from `.env` if it is set there. Empty on a plain web build, which wants same-origin. */
+/**
+ * Where the API lives for a native client, compiled in from `.env` at build time
+ * (`VITE_API_BASE_URL`). Empty on a web build, which talks to its own origin.
+ *
+ * This is a build-time decision on purpose. A packaged app is built for the server it belongs to,
+ * so asking the person using it to type an address made them answer a question the build already
+ * knew the answer to - and a typo there looked like a broken app rather than a wrong address.
+ */
 const BUILT_IN = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
-
-/**
- * Tidies a server address into an origin. Accepts what someone would actually type - "notes.example"
- * or "notes.example/" - and assumes https, because a plaintext address is not something to guess on
- * the user's behalf.
- */
-export function normaliseServer(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, '');
-  if (trimmed === '') {
-    return '';
-  }
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-
-  // Throws for anything that is not a URL at all, which the caller turns into a message.
-  const url = new URL(withScheme);
-  return url.origin;
-}
-
-/** The address the user set on this device, if any. */
-export function storedServer(): string {
-  try {
-    return localStorage.getItem(SERVER_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-export function setStoredServer(origin: string): void {
-  try {
-    if (origin === '') {
-      localStorage.removeItem(SERVER_KEY);
-    } else {
-      localStorage.setItem(SERVER_KEY, origin);
-    }
-  } catch {
-    // Nowhere to remember it. The address still works for this session.
-  }
-}
-
-/**
- * Where the API lives. An empty string means "wherever this page came from", which is right for the
- * web client and impossible for a native one - see `needsServer`.
- */
-export function apiOrigin(): string {
-  return storedServer() || BUILT_IN;
-}
 
 /**
  * Whether the page was served by something that can answer `/api` itself.
  *
- * True for the web client, and also true for `tauri dev`, where the window loads from the Vite
- * server and that server proxies the API. False for a packaged app, which loads from the app's own
- * asset protocol - `tauri://localhost`, or `http://tauri.localhost` on Windows and Android, which is
- * why the hostname matters and not just the scheme.
+ * True for the web client, and for `tauri dev` on the desktop, where the window loads from the Vite
+ * server and that server proxies the API. False for a packaged app, and false for `tauri android
+ * dev` too: Android serves the dev server through the app's own asset protocol, so the page comes
+ * from `http://tauri.localhost` and there is no proxy behind it. That is why the hostname matters
+ * and not just the scheme.
  */
 function servedByServer(): boolean {
   if (!isNative()) {
@@ -83,12 +43,22 @@ function servedByServer(): boolean {
 }
 
 /**
- * A packaged native client that has not been told which server to talk to cannot do anything at
- * all, so the sign-in screen asks first. The web client is never in this position: it was served by
- * the server it is going to call.
+ * Where the API lives. An empty string means "wherever this page came from".
+ *
+ * The web client is always same-origin - it was served by the server it is going to call, and a
+ * build-time address would only be a way to get that wrong.
  */
-export function needsServer(): boolean {
-  return !servedByServer() && apiOrigin() === '';
+export function apiOrigin(): string {
+  return isNative() ? BUILT_IN : '';
+}
+
+/**
+ * A native build with no address compiled in and nothing serving it can reach no server at all.
+ * There is nothing the person using it can do about that, so the app says what is wrong rather
+ * than asking them to fix it: it is the build that is incomplete, not their input.
+ */
+export function serverMissing(): boolean {
+  return isNative() && BUILT_IN === '' && !servedByServer();
 }
 
 /** Absolute URL for an API path, same-origin-relative on the web. */

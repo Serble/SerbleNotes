@@ -11,6 +11,7 @@ import {
   RenameIcon,
   TrashIcon,
 } from './Icons';
+import { ContextMenu, type MenuItem, type MenuState } from './ContextMenu';
 import type { TreeNode } from '../services/store';
 
 export interface TreeActions {
@@ -155,19 +156,6 @@ function filterTree(nodes: TreeNode[], needle: string): TreeNode[] {
     });
 
   return walk(nodes);
-}
-
-interface MenuItem {
-  label: string;
-  icon: React.ReactNode;
-  danger?: boolean;
-  run: () => void;
-}
-
-interface MenuState {
-  x: number;
-  y: number;
-  items: MenuItem[];
 }
 
 export function NoteTree(props: NoteTreeProps) {
@@ -530,70 +518,6 @@ function RenameRow({
           }
         }}
       />
-    </div>
-  );
-}
-
-function ContextMenu({
-  x,
-  y,
-  items,
-  onClose,
-}: MenuState & { onClose: () => void }) {
-  const panel = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: x, top: y });
-
-  useEffect(() => {
-    // Nudge back inside the window if it opened near an edge.
-    const box = panel.current?.getBoundingClientRect();
-    if (!box) {
-      return;
-    }
-    setPosition({
-      left: Math.min(x, window.innerWidth - box.width - 8),
-      top: Math.min(y, window.innerHeight - box.height - 8),
-    });
-  }, [x, y]);
-
-  useEffect(() => {
-    const dismiss = () => onClose();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('mousedown', dismiss);
-    window.addEventListener('resize', dismiss);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', dismiss);
-      window.removeEventListener('resize', dismiss);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      className="context-menu"
-      ref={panel}
-      style={position}
-      onMouseDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => event.preventDefault()}
-    >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          className={item.danger ? 'context-item danger' : 'context-item'}
-          onClick={() => {
-            onClose();
-            item.run();
-          }}
-        >
-          {item.icon}
-          {item.label}
-        </button>
-      ))}
     </div>
   );
 }

@@ -16,6 +16,11 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // `tauri android dev` cannot reach a server bound to loopback, so it rewrites devUrl to this
+    // machine's LAN address and exports that address as TAURI_DEV_HOST for us to bind to. Unset for
+    // a plain `npm run dev`, which stays on localhost rather than putting the dev server on the
+    // network for anyone who happens to be on it.
+    host: process.env.TAURI_DEV_HOST || false,
     fs: {
       // The dev server has to be allowed to read the core's pkg/ directory, which sits above root.
       allow: ['.', CORE_DIR],

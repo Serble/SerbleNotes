@@ -9,6 +9,9 @@ import { completeLoginFromUrl } from './services/auth';
 import { isNative } from './services/platform';
 import type { Vault } from './types';
 
+/** Redirect URLs already exchanged, so a repeated delivery is ignored rather than re-used. */
+const handledLinks = new Set<string>();
+
 export default function App() {
   const [coreReady, setCoreReady] = useState(false);
   const [coreError, setCoreError] = useState<string | null>(null);
@@ -50,6 +53,15 @@ export default function App() {
 
     const arrive = (urls: string[] | null) => {
       for (const url of urls ?? []) {
+        // The same redirect can arrive twice: once as the event, once from getCurrent, and twice
+        // again because StrictMode runs this effect twice in development. An OAuth code is single
+        // use, so exchanging it a second time races two account creations and burns the code - the
+        // sign-in that worked reports an error. Module-level, because it has to outlive the remount.
+        if (handledLinks.has(url)) {
+          continue;
+        }
+        handledLinks.add(url);
+
         completeLoginFromUrl(url).catch((e: unknown) =>
           setLoginError(e instanceof Error ? e.message : String(e)),
         );

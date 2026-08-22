@@ -245,3 +245,120 @@ export const CheckIcon = ({ size = 16 }: IconProps) => (
     <path d="M5 12.5l4.5 4.5L19 7" />
   </svg>
 );
+
+/*
+ * Scissors, and the one glyph in this set at the limit of the weight: two rings and two blades is
+ * four strokes where everything else here manages two or three. It stays because there is no other
+ * drawing anybody reads as "cut" - a simplification would be a mark that has to be learned - and the
+ * rings are drawn a shade larger than they want to be so they do not fill in solid at 2.2.
+ */
+export const CutIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <circle cx="6.5" cy="6.5" r="2.8" />
+    <circle cx="6.5" cy="17.5" r="2.8" />
+    <path d="M8.9 8 20 20" />
+    <path d="M20 4 8.9 16" />
+  </svg>
+);
+
+/* A board with the clip breaking its top edge - the same idea as the page in the product mark. */
+export const PasteIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M9 4.6H7a2 2 0 0 0-2 2v12.4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6.6a2 2 0 0 0-2-2h-2" />
+    <rect x="9" y="2.8" width="6" height="3.6" rx="1.2" />
+  </svg>
+);
+
+/* A table: the box, the rule under its header, and one division between columns. */
+export const TableIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+    <path d="M3.5 9.8h17" />
+    <path d="M10 9.8v9.7" />
+  </svg>
+);
+
+/* Rows and columns: the same box, divided the way the thing being added divides it. */
+export const RowIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+    <path d="M3.5 12h17" />
+  </svg>
+);
+
+export const ColumnIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+    <path d="M12 4.5v15" />
+  </svg>
+);
+
+/* Alignment, shown the way it reads: a full line and two that sit where the text would. */
+export const AlignLeftIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M4 6.5h16" />
+    <path d="M4 12h10" />
+    <path d="M4 17.5h13" />
+  </svg>
+);
+
+export const AlignCentreIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M4 6.5h16" />
+    <path d="M7 12h10" />
+    <path d="M5.5 17.5h13" />
+  </svg>
+);
+
+export const AlignRightIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M4 6.5h16" />
+    <path d="M10 12h10" />
+    <path d="M7 17.5h13" />
+  </svg>
+);
+
+/* The markdown behind a table: a serif "T" on its baseline, the mark every editor uses for source. */
+export const TextIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M5 6.4V4.6h14v1.8" />
+    <path d="M12 4.6v14.8" />
+    <path d="M9 19.4h6" />
+  </svg>
+);
+
+/* The dotted handle a row is dragged by, two columns of three. */
+export const GripIcon = ({ size = 12 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M9.5 6h.01M14.5 6h.01M9.5 12h.01M14.5 12h.01M9.5 18h.01M14.5 18h.01" />
+  </svg>
+);
+
+/* Moving something one place: a line with an arrow leaving it. Four directions, one drawing turned. */
+export const MoveUpIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M12 20V6" />
+    <path d="M6 12l6-6 6 6" />
+  </svg>
+);
+
+export const MoveDownIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M12 4v14" />
+    <path d="M6 12l6 6 6-6" />
+  </svg>
+);
+
+export const MoveLeftIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M20 12H6" />
+    <path d="M12 6l-6 6 6 6" />
+  </svg>
+);
+
+export const MoveRightIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M4 12h14" />
+    <path d="M12 6l6 6-6 6" />
+  </svg>
+);

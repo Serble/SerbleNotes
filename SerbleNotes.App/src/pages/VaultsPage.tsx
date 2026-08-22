@@ -16,6 +16,7 @@ import { PasswordStrength } from '../components/PasswordStrength';
 import { api } from '../services/api';
 import { logout } from '../services/auth';
 import { day, relative } from '../services/dates';
+import { forgetVault } from '../services/settings';
 import { changePassword, forgetKey, newVaultMaterial, rememberKey } from '../services/vaultKeys';
 import type { Vault } from '../types';
 
@@ -47,6 +48,7 @@ export function VaultsPage({ onOpenVault }: VaultsPageProps) {
     try {
       await api.deleteVault(vault.id);
       await forgetKey(vault.id);
+      forgetVault(vault.id);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

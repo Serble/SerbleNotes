@@ -1,7 +1,9 @@
 import { syntaxTree } from '@codemirror/language';
+import { displayWidth } from './tableFormat';
+import { isTextMode } from './tableState';
 import { codeBlockWidth, codeWidthsChanged } from './codeWidths';
 import { languageLabel } from './codeLanguages';
-import type { Range } from '@codemirror/state';
+import type { EditorState, Range } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 
 /**
@@ -20,7 +22,66 @@ const headingLine = [1, 2, 3, 4, 5, 6].map((level) =>
 );
 
 const quoteLine = Decoration.line({ class: 'cm-md-quote' });
+
+/**
+ * A line with nothing on it, with its line break inside the selection.
+ *
+ * The browser paints a selection onto text, and there is none here - so dragging across a blank line
+ * leaves a gap that reads as "this line was not selected", when in fact its line break was and will
+ * be cut or copied with the rest. The style behind this class paints the width of a space, which is
+ * what the blank line would have shown if the break had been one.
+ */
+const blankSelected = Decoration.line({ class: 'cm-md-blank-selected' });
 const codeCloseLine = Decoration.line({ class: 'cm-md-code-close' });
+
+/*
+ * A table is painted the way a code block is: one card made of ordinary lines, because CodeMirror
+ * gives every line its own element and there is no element for the block itself. The band runs the
+ * width of the pane rather than shrinking to the table, which a code block does - a table's source
+ * is laid out to a common width by tables.ts, but only once the cursor has left it, and a card that
+ * shrank and grew around the row being typed would be worse than no card at all.
+ *
+ * The header row is the top edge and is emboldened there; the `|---|` row under it keeps its text
+ * and is drawn faint, so it reads as the rule it is meant to be without anything being hidden from
+ * somebody trying to correct it.
+ */
+/**
+ * A line of a table shown as markdown, at the width of the whole table.
+ *
+ * The band hugs what is in it rather than running to the edge of the pane. It can, where a code
+ * block's card could not (`codeWidths.ts` has to measure one off-screen): these lines are monospace
+ * and `renderTable` has already padded every one of them to the same number of columns, so `ch` -
+ * the width of one character in the font the line is drawn in - turns that count straight into a
+ * width with nothing to measure. Every line of the table is given the widest one, so the sides stay
+ * straight even while somebody is part-way through typing a row that is longer than the rest.
+ *
+ * Cached by width, because CodeMirror compares decorations by identity and a fresh object per line
+ * would redraw the whole table on every keystroke.
+ */
+const tableLines = new Map<number, Decoration>();
+
+function tableLine(columns: number): Decoration {
+  const cached = tableLines.get(columns);
+  if (cached) {
+    return cached;
+  }
+
+  const decoration = Decoration.line({
+    class: 'cm-md-table',
+    // The padding and the borders are in the width because the line is a border box; the extra
+    // couple of pixels are slack, since a width a hair too small wraps the last character onto a
+    // line of its own.
+    attributes: { style: `width:calc(${columns}ch + 1.7rem + 4px)` },
+  });
+  tableLines.set(columns, decoration);
+  return decoration;
+}
+const tableOpenLine = Decoration.line({ class: 'cm-md-table-open' });
+const tableRuleLine = Decoration.line({ class: 'cm-md-table-rule' });
+const tableCloseLine = Decoration.line({ class: 'cm-md-table-close' });
+
+/** The pipes, and the whole of the `|---|` row - markdown's own punctuation, kept but quietened. */
+const tableMark = Decoration.mark({ class: 'cm-md-table-mark' });
 
 /**
  * A line of a code block, at the width of the block it belongs to.
@@ -85,6 +146,15 @@ const STYLED: Record<string, Decoration> = {
   InlineCode: inlineCode,
 };
 
+/**
+ * Whether the line break at this position is inside a selection - which is the question a blank line
+ * asks. A selection that stops exactly here has not taken the break with it, and the line below is
+ * still a line of its own.
+ */
+function breakSelected(state: EditorState, at: number): boolean {
+  return state.selection.ranges.some((range) => !range.empty && range.from <= at && range.to > at);
+}
+
 function build(view: EditorView): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const { state } = view;
@@ -97,6 +167,20 @@ function build(view: EditorView): DecorationSet {
     const last = state.doc.lineAt(range.to).number;
     for (let line = first; line <= last; line += 1) {
       activeLines.add(line);
+    }
+  }
+
+  // Blank lines whose line break is selected. Walked line by line rather than taken from the syntax
+  // tree, because a line with nothing on it is not a node - there is nothing there to be one.
+  for (const { from, to } of view.visibleRanges) {
+    for (let line = state.doc.lineAt(from); ; ) {
+      if (line.length === 0 && breakSelected(state, line.from)) {
+        decorations.push(blankSelected.range(line.from));
+      }
+      if (line.to >= to || line.number === state.doc.lines) {
+        break;
+      }
+      line = state.doc.line(line.number + 1);
     }
   }
 
@@ -148,6 +232,50 @@ function build(view: EditorView): DecorationSet {
 
             position = line.to + 1;
           }
+          return;
+        }
+
+        if (name === 'Table') {
+          const first = state.doc.lineAt(node.from);
+          const last = state.doc.lineAt(node.to);
+
+          // A table is normally drawn rather than shown as markdown (tableView.ts), and its lines
+          // are then not on the screen at all. These are the styles for the markdown behind it,
+          // which only somebody who asked for it ever sees.
+          if (!isTextMode(state, first.from)) {
+            return false;
+          }
+
+          // One width for the whole table, so the card has straight sides: the widest line decides.
+          let columns = 0;
+          for (let position = node.from; position <= node.to; ) {
+            const line = state.doc.lineAt(position);
+            columns = Math.max(columns, displayWidth(line.text));
+            position = line.to + 1;
+          }
+
+          for (let position = node.from; position <= node.to; ) {
+            const line = state.doc.lineAt(position);
+            decorations.push(tableLine(columns).range(line.from));
+
+            if (line.number === first.number) {
+              decorations.push(tableOpenLine.range(line.from));
+            }
+            if (line.number === first.number + 1) {
+              decorations.push(tableRuleLine.range(line.from));
+            }
+            if (line.number === last.number && last.number !== first.number) {
+              decorations.push(tableCloseLine.range(line.from));
+            }
+
+            position = line.to + 1;
+          }
+          // No `false`: the pipes inside are TableDelimiter nodes, and they are styled below.
+          return;
+        }
+
+        if (name === 'TableDelimiter') {
+          decorations.push(tableMark.range(node.from, node.to));
           return;
         }
 

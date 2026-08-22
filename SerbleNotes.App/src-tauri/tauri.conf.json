@@ -30,7 +30,8 @@
     "deep-link": {
       "desktop": {
         "schemes": ["serblenotes"]
-      }
+      },
+      "mobile": [{ "scheme": ["serblenotes"] }]
     }
   },
   "bundle": {

@@ -11,6 +11,7 @@ import {
 } from '../core';
 import type { Note, NoteVersion, Vault } from '../types';
 import { api, type NewVersion } from './api';
+import { randomId } from './ids';
 
 /** A node in the folder tree the sidebar draws. Folders are derived from names, never stored. */
 export interface TreeNode {
@@ -339,7 +340,7 @@ export class VaultStore {
     const body = isSnapshot ? text : makeDiff(previousText, text);
 
     return {
-      id: crypto.randomUUID(),
+      id: randomId(),
       parentId,
       mergeParentId: options.mergeParentId ?? null,
       isSnapshot,
@@ -372,7 +373,7 @@ export class VaultStore {
 
   /** The create itself, without the pull. Import does hundreds of these and pulls once at the end. */
   private async postNote(path: string, text: string): Promise<Note> {
-    const id = crypto.randomUUID();
+    const id = randomId();
     const initialVersion = this.buildVersion(null, '', text, { forceSnapshot: true });
     const name = seal(this.key, normalisePath(path));
 

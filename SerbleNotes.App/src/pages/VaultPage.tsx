@@ -34,6 +34,7 @@ import {
   saveLayout,
   type Layout,
 } from "../services/layout";
+import { lastNoteIn, rememberNote } from "../services/settings";
 import { SyncSocket } from "../services/sync";
 import { VaultStore } from "../services/store";
 import { keyFor, unlock } from "../services/vaultKeys";
@@ -264,6 +265,7 @@ function Workspace({
   const openNote = useCallback(
     (noteId: string) => {
       setSelected(noteId);
+      rememberNote(vault.id, noteId);
       setBaseline(store.headOf(noteId));
       setText(store.textOf(noteId));
       setConflicted(false);
@@ -273,23 +275,29 @@ function Workspace({
       // Picking a note is the point of the drawer, so it gets out of the way once you have.
       setNavOpen(false);
     },
-    [store],
+    [store, vault.id],
   );
 
   useEffect(() => {
     store
       .pull()
       .then(() => {
-        const first = store.listNotes()[0];
-        if (first) {
-          openNote(first.id);
+        const notes = store.listNotes();
+
+        // Where this device left off, as long as that note still exists - it can have been deleted
+        // on another device since, and an id that no longer names anything opens nothing at all.
+        const remembered = lastNoteIn(vault.id);
+        const reopen = notes.find((note) => note.id === remembered) ?? notes[0];
+
+        if (reopen) {
+          openNote(reopen.id);
         }
       })
       .catch((e: unknown) =>
         setError(e instanceof Error ? e.message : String(e)),
       )
       .finally(() => setLoading(false));
-  }, [store, openNote]);
+  }, [store, openNote, vault.id]);
 
   /** Someone else changed this vault. Pull, then reconcile with whatever is in the editor. */
   const handleRemoteChange = useCallback(async () => {
@@ -717,7 +725,15 @@ function Workspace({
         )}
 
         <main className="editor">
-          {previewVersion ? (
+          {/* Until the pull lands there is no tree and no note, which is not the same thing as an
+              empty vault - saying "Nothing open" here and then opening a note a moment later reads
+              as the app changing its mind. */}
+          {loading ? (
+            <div className="empty">
+              <h2>Loading notes...</h2>
+              <p className="muted">Decrypting this vault on your device.</p>
+            </div>
+          ) : previewVersion ? (
             <div className="version-view">
               <div className="version-bar">
                 <div className="version-bar-text">
@@ -783,7 +799,12 @@ function Workspace({
                 }
               />
               {/* Keyed by note so each note gets its own undo history. */}
-              <MarkdownEditor key={selected} value={text} onChange={setText} />
+              <MarkdownEditor
+                key={selected}
+                value={text}
+                onChange={setText}
+                onNotice={setError}
+              />
             </>
           ) : (
             <div className="empty">

@@ -15,7 +15,8 @@
     "android:init": "tauri android init && python3 ../scripts/android-deeplink.py",
     "android": "tauri android dev",
     "android:build": "tauri android build",
-    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives"
+    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives",
+    "test": "node --experimental-transform-types --import ./tests/support/register.mjs --test 'tests/*.test.ts'"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

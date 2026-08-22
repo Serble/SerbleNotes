@@ -34,6 +34,11 @@
   --accent-fill-hover: #3d7cf5;
   --on-accent: #ffffff;
 
+  /* The one selection colour. The browser paints it for text; the editor paints it itself on an
+     empty line, which has no text to paint it on - see .cm-md-blank-selected in MarkdownEditor.tsx.
+     Both read this, so a selection cannot end up two different colours. */
+  --selection: color-mix(in srgb, var(--accent) 28%, transparent);
+
   --danger: #ff6b70;
   --danger-fill: #b8383d;
   --danger-fill-hover: #c94247;
@@ -53,6 +58,18 @@
 
   --sidebar: 262px;
   --rail: 320px;
+
+  /* What the system draws over: the status bar, the gesture bar, and a landscape cutout. Zero
+     everywhere except a phone, so the same rules serve both. Only surfaces that touch an edge of
+     the screen add them - inside the app bar or a dialog, ordinary padding is already enough. */
+  /* What the on-screen keyboard covers, measured in services/viewport.ts because the Android
+     WebView will not shrink the layout viewport for it the way a browser does. */
+  --kb: 0px;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 
   color-scheme: dark;
 }
@@ -312,8 +329,9 @@ p.small, span.small, .small { font-size: 0.82rem; }
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.4rem 0.75rem;
-  min-height: 48px;
+  padding: calc(0.4rem + var(--safe-top)) calc(0.75rem + var(--safe-right)) 0.4rem
+    calc(0.75rem + var(--safe-left));
+  min-height: calc(48px + var(--safe-top));
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
@@ -520,7 +538,8 @@ p.small, span.small, .small { font-size: 0.82rem; }
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 1.5rem;
+  padding: calc(1.5rem + var(--safe-top)) calc(1.5rem + var(--safe-right))
+    calc(1.5rem + var(--safe-bottom) + var(--kb)) calc(1.5rem + var(--safe-left));
 }
 
 .card {
@@ -567,6 +586,7 @@ p.small, span.small, .small { font-size: 0.82rem; }
   display: flex;
   min-height: 0;
   position: relative;
+  padding-bottom: calc(var(--safe-bottom) + var(--kb));
 }
 
 .sidebar {
@@ -1058,6 +1078,10 @@ body.resizing * { cursor: inherit; }
   position: fixed;
   z-index: 20;
   min-width: 200px;
+  /* The editor's menu is a long one when the cursor is in a table, and a phone is not tall. It
+     scrolls inside itself rather than running off the bottom of the screen. */
+  max-height: min(70vh, 620px);
+  overflow-y: auto;
   padding: 0.25rem;
   display: flex;
   flex-direction: column;
@@ -1075,8 +1099,19 @@ body.resizing * { cursor: inherit; }
   font-weight: 400;
   color: var(--text);
 }
-.context-item:hover { background: var(--hover); }
+.context-item:hover:not(:disabled) { background: var(--hover); }
 .context-item.danger { color: var(--danger); }
+/* One of a set of choices, and the one in force. Colour marks state, which is what this is. */
+.context-item.on { color: var(--accent); }
+/* Shown rather than left out, with a title saying why - a menu whose items move about between
+   openings is one nobody can learn. See "Inform, never forbid". */
+.context-item:disabled { color: var(--faint); cursor: default; }
+
+.context-sep {
+  height: 1px;
+  margin: 0.25rem 0.3rem;
+  background: var(--border-2);
+}
 
 /* The folders a note sits in, shown above its name rather than typed into it. */
 .crumbs {
@@ -1121,12 +1156,16 @@ body.resizing * { cursor: inherit; }
 
 .modal-backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: var(--kb);
   z-index: 30;
   background: rgba(0, 0, 0, 0.6);
   display: grid;
   place-items: center;
-  padding: 1.25rem;
+  padding: calc(1.25rem + var(--safe-top)) calc(1.25rem + var(--safe-right))
+    calc(1.25rem + var(--safe-bottom)) calc(1.25rem + var(--safe-left));
 }
 
 .modal {
@@ -1136,7 +1175,7 @@ body.resizing * { cursor: inherit; }
   box-shadow: var(--shadow);
   padding: 1.25rem;
   width: min(430px, 100%);
-  max-height: min(90vh, 90dvh);
+  max-height: 100%;
   overflow-y: auto;
 }
 .modal.wide { width: min(640px, 100%); }
@@ -1197,6 +1236,217 @@ body.resizing * { cursor: inherit; }
   .copy-code { padding: 0.3rem 0.7rem; font-size: 0.75rem; }
 }
 
+/* The two buttons that grow a table, placed by components/tableControls.ts. Centred on the table's
+   own border - half in, half out - which is the position that says which edge a new row or column
+   joins without a word of explanation. `translate(-50%, -50%)` is what lets the plugin place them
+   from one point and know nothing about how big they are on this device. */
+.cm-table-add {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  min-height: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  justify-content: center;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+}
+.cm-table-add:hover { color: var(--accent); border-color: var(--accent); background: var(--raised); }
+.cm-table-add[hidden] { display: none; }
+
+/* A finger needs more of them, and there is no hover to reveal them either - being anchored to the
+   table the cursor is in is what puts them within reach on a phone. */
+@media (pointer: coarse) {
+  .cm-table-add { width: 34px; height: 34px; }
+}
+
+/* ---------------------------------------------------------------- the table in the editor */
+
+/* A table in a note is drawn as a table - a block widget standing in for its markdown, built by
+   components/tableWidget.ts. Everything below is that widget; the markdown behind it, when somebody
+   asks to see it, is styled by the .cm-md-table rules in MarkdownEditor.tsx instead.
+
+   The whole thing is quiet until you point at it: the buttons that grow it and the handles that
+   reorder it are chrome sitting on top of the note, and the note is the thing being read. Where
+   there is no pointer they are simply there, because there is no hover to reveal them with. */
+/* The widget is as wide as its own table and no wider, up to the width of the pane - which is what
+   makes a column exactly as wide as what is in it.
+
+   Stretching the table to fill instead (`min-width: 100%` on the table, which this used to have) is
+   what broke it: the surplus had to be given to some column, the browser gave nearly all of it to
+   whichever column had the most text in it, and that column then grew every time somebody typed in
+   its heading. Worse, the cell's own cap held the editable box at its proper width while the column
+   around it kept growing, leaving a dead strip you could not click into. */
+.cm-table {
+  /* How much room the first column keeps clear down its left side for the drag handles. One value,
+     used by the padding that makes the room and by the handle that sits in it, so the two cannot
+     drift apart and leave a handle sitting on top of somebody's text. */
+  --grip: 1.5rem;
+
+  width: max-content;
+  max-width: 100%;
+
+  /* Padding, and never margin. The editor measures a block widget with `getBoundingClientRect`,
+     which does not include margins - so a margin here is space on the screen that the editor does
+     not know about, and every line below the table sits that much lower than the editor thinks it
+     does. That is not a cosmetic error: clicking, dragging out a selection and arrowing up and down
+     all go through the editor's idea of where the lines are, so they all end up off by the margin,
+     and off by the sum of them once a note has more than one table in it. */
+  padding: 0.5rem 0;
+  box-sizing: border-box;
+
+  font-size: 0.94em;
+  line-height: 1.5;
+  /* The editor's content is `pre-wrap` so that a note's own spacing survives. Inside the widget that
+     is wrong for everything except the cells, which ask for it back below. */
+  white-space: normal;
+}
+
+.cm-table-frame { display: flex; align-items: stretch; gap: 0; }
+
+/* The card. A table wider than the pane scrolls inside this rather than widening the note: the
+   widget above stops growing at the pane, and `min-width: 0` is what lets this shrink to match. */
+.cm-table-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* `max-content` is what makes a column as wide as what is in it. Nothing makes it any wider. */
+.cm-table table {
+  width: max-content;
+  border-collapse: collapse;
+}
+
+.cm-table th,
+.cm-table td {
+  padding: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.cm-table th:last-child,
+.cm-table td:last-child { border-right: none; }
+.cm-table tr:last-child td { border-bottom: none; }
+.cm-table th { background: var(--surface-2); }
+
+/* The first cell of a body row is what the drag handle hangs off, and it needs a corner to hang in. */
+.cm-table tbody td:first-child { position: relative; }
+
+/* The whole first column is inset by the width of a handle - the header too, or the first column's
+   heading would not line up with what is under it. The handles then have a lane of their own instead
+   of being drawn over the first thing every row says. */
+.cm-table thead th:first-child .cm-td,
+.cm-table tbody td:first-child .cm-td { padding-left: var(--grip); }
+
+/* The editable part. The padding is here rather than on the cell so that clicking anywhere in the
+   cell lands in the text - a cell with padding of its own has a rim that focuses nothing.
+   The cap on the width is what stops one long sentence turning into one enormous column; past it the
+   text wraps, and `anywhere` because what overflows is usually one unbreakable token. */
+.cm-td {
+  display: block;
+  min-width: 4.5rem;
+  max-width: 22rem;
+  padding: 0.4rem 0.6rem;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cm-td:focus { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cm-table th .cm-td { font-weight: 650; color: var(--text); }
+.cm-td-center { text-align: center; }
+.cm-td-right { text-align: right; }
+.cm-td-left { text-align: left; }
+
+/* The two buttons that grow the table: a strip down the right for a column, a bar along the bottom
+   for a row. They are the width and the height of the edge they add to, so there is no question
+   which one does which. */
+.cm-table-plus {
+  min-height: 0;
+  padding: 0;
+  justify-content: center;
+  color: var(--faint);
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  opacity: 0.75;
+}
+.cm-table-plus:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--hover);
+  opacity: 1;
+}
+.cm-plus-col { width: 22px; margin-left: 3px; }
+.cm-plus-row { flex: 1; height: 22px; }
+
+.cm-table-foot { display: flex; align-items: center; gap: 3px; margin-top: 3px; }
+
+/* The way between a table and the markdown underneath it. Quiet, and named rather than only drawn:
+   "Text" and "Table" are promises about what you will get, and an icon on its own would be a guess.
+
+   One rule for both directions. `.cm-table-back` is the same button on the way back, placed over the
+   markdown by components/tableControls.ts - it is absolutely positioned rather than sitting in a
+   footer, and is otherwise the same object in the same corner, because a control that moved across
+   the screen when it was pressed would be two controls. */
+.cm-table-mode {
+  min-height: 0;
+  height: 22px;
+  padding: 0 0.5rem;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
+.cm-table-mode:hover { color: var(--text-2); background: var(--hover); }
+
+.cm-table-back { position: absolute; z-index: 2; margin-top: 3px; }
+.cm-table-back[hidden] { display: none; }
+
+/* The handle a row is dragged by. It sits in the lane the first column keeps clear for it, and
+   `touch-action: none` is what stops a finger on it scrolling the page instead. */
+.cm-row-grip {
+  position: absolute;
+  left: 0.2rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: calc(var(--grip) - 0.4rem);
+  min-height: 0;
+  height: 22px;
+  padding: 0;
+  justify-content: center;
+  color: var(--faint);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+}
+.cm-table tr:hover .cm-row-grip,
+.cm-row-grip:focus-visible { opacity: 1; }
+.cm-row-grip:hover { color: var(--text-2); background: var(--hover); }
+
+.cm-row-dragging { opacity: 0.4; }
+/* Where the row would land. A line rather than a highlight: it is a position between rows, not a
+   row that is about to be replaced. */
+.cm-row-over td { box-shadow: inset 0 2px 0 0 var(--accent); }
+
+/* No hover to reveal anything with, and a finger needs more of everything. */
+@media (pointer: coarse) {
+  .cm-table { --grip: 2.1rem; }
+  .cm-td { padding: 0.55rem 0.7rem; }
+  .cm-plus-col { width: 34px; }
+  .cm-plus-row { height: 34px; }
+  .cm-table-mode { height: 34px; font-size: 0.78rem; }
+  .cm-row-grip { opacity: 1; height: 34px; }
+}
+
 /* The card is as wide as the block needs and no wider, up to the width of the pane, at which point
    its lines wrap - the same shape the editor gives a block, worked out there by measuring because a
    code block there is one element per line. Here it is one element, so this is the whole of it.
@@ -1234,9 +1484,36 @@ body.resizing * { cursor: inherit; }
   border-left: 3px solid var(--border-2);
   color: var(--muted);
 }
-.markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
+/* The rendered table, given the same card the editor draws around the source: one border round the
+   outside, a rule under the header, and the header itself picked out. `display: block` is what lets
+   a table wider than the pane scroll inside itself instead of widening the page. */
+.markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.9rem 0;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
 .markdown th,
-.markdown td { border: 1px solid var(--border); padding: 0.35rem 0.6rem; }
+.markdown td {
+  padding: 0.4rem 0.7rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.markdown th:last-child,
+.markdown td:last-child { border-right: none; }
+.markdown tr:last-child td { border-bottom: none; }
+.markdown th { font-weight: 650; color: var(--text); background: var(--surface-2); }
+/* Alignment written into the table is markdown's, not ours, so it wins over the default above. */
+.markdown th[align='center'],
+.markdown td[align='center'] { text-align: center; }
+.markdown th[align='right'],
+.markdown td[align='right'] { text-align: right; }
 .markdown img { max-width: 100%; }
 .markdown a { color: var(--accent); }
 
@@ -1316,10 +1593,13 @@ body.resizing * { cursor: inherit; }
   .wide-only { display: none; }
   .narrow-only { display: inline-flex !important; }
 
-  .app-bar { padding: 0.35rem 0.5rem; }
+  .app-bar {
+    padding: calc(0.35rem + var(--safe-top)) calc(0.5rem + var(--safe-right)) 0.35rem
+      calc(0.5rem + var(--safe-left));
+  }
   .app-bar-left h1 { font-size: 1rem; }
 
-  .page { padding: 1.25rem 0.9rem 2.5rem; }
+  .page { padding: 1.25rem 0.9rem calc(2.5rem + var(--safe-bottom) + var(--kb)); }
   .page-head { flex-direction: column; align-items: stretch; }
   .page-head button { width: 100%; }
 

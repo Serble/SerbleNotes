@@ -1,14 +1,7 @@
 import { useState } from 'react';
 import { LogoIcon } from '../components/Icons';
 import { beginLogin } from '../services/auth';
-import {
-  apiOrigin,
-  isNative,
-  needsServer,
-  normaliseServer,
-  setStoredServer,
-  storedServer,
-} from '../services/platform';
+import { isNative, serverMissing } from '../services/platform';
 
 export function LoginPage({ notice, error }: { notice?: string | null; error?: string | null }) {
   const [failure, setFailure] = useState<string | null>(null);
@@ -39,11 +32,17 @@ export function LoginPage({ notice, error }: { notice?: string | null; error?: s
           </p>
         </div>
 
-        {/* The web client was served by the server it talks to, and so is a `tauri dev` window. A
-            packaged app was not, so it has to be told, and there is no sensible default to guess. */}
-        {(needsServer() || storedServer() !== '') && <ServerField />}
-
         {notice && <p className="muted small notice">{notice}</p>}
+
+        {/* Not something the user can answer: the address is compiled in, so an empty one is a
+            build that was made without VITE_API_BASE_URL. Say that rather than asking them. */}
+        {serverMissing() && (
+          <p className="error">
+            This build has no server address in it. It was built without VITE_API_BASE_URL, so it
+            has nowhere to sign in to.
+          </p>
+        )}
+
         <button className="primary full" onClick={() => void signIn()} disabled={busy}>
           {busy ? 'Opening your browser...' : 'Sign in with Serble'}
         </button>
@@ -57,53 +56,5 @@ export function LoginPage({ notice, error }: { notice?: string | null; error?: s
         {(failure ?? error) && <p className="error">{failure ?? error}</p>}
       </div>
     </div>
-  );
-}
-
-function ServerField() {
-  const [draft, setDraft] = useState(storedServer());
-  const [saved, setSaved] = useState<string>(apiOrigin());
-  const [problem, setProblem] = useState<string | null>(null);
-
-  const commit = () => {
-    try {
-      const origin = normaliseServer(draft);
-      setStoredServer(origin);
-      setSaved(origin || apiOrigin());
-      setDraft(origin);
-      setProblem(null);
-    } catch {
-      setProblem('That does not look like a web address.');
-    }
-  };
-
-  return (
-    <label>
-      Server
-      <input
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.currentTarget.blur();
-          }
-        }}
-        placeholder="notes.example.net"
-        autoCapitalize="none"
-        autoCorrect="off"
-        spellCheck={false}
-        inputMode="url"
-      />
-      {problem ? (
-        <span className="error small">{problem}</span>
-      ) : saved === '' ? (
-        <span className="warning small">
-          Enter the address of your Serble Notes server to sign in.
-        </span>
-      ) : (
-        <span className="muted small">Signing in to {saved}</span>
-      )}
-    </label>
   );
 }

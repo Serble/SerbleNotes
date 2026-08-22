@@ -4,10 +4,15 @@ import { markdownLanguage } from './markdownLanguage';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { codeWidths } from './codeWidths';
+import { ContextMenu, type MenuState } from './ContextMenu';
 import { copyCode } from './copyCode';
+import { editorMenu } from './editorMenu';
 import { livePreview } from './livePreview';
+import { tableControls } from './tableControls';
+import { tableView } from './tableView';
+import { tables } from './tables';
 
 /**
  * Syntax colours inside fenced code blocks.
@@ -73,9 +78,25 @@ const theme = EditorView.theme({
   '.cm-line': { padding: '0 2px' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)', borderLeftWidth: '2px' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: 'color-mix(in srgb, var(--accent) 28%, transparent)',
+    backgroundColor: 'var(--selection)',
   },
   '.cm-activeLine': { backgroundColor: 'transparent' },
+
+  // A blank line inside a selection.
+  //
+  // The browser paints a selection onto text, and a blank line has none - so dragging across one
+  // leaves a gap that looks like the line was skipped, when in fact its line break is selected and
+  // will be cut or copied with the rest. Every editor answers this by painting the width of a space,
+  // and that is what this is: one band of the selection colour at the start of the line and nothing
+  // after it. A gradient rather than a width, because the thing being coloured is the line's own
+  // element, which is as wide as the pane whatever is on it.
+  //
+  // Only ever on a line with nothing on it, so it can never end up painted over text that the
+  // browser is already colouring in.
+  '.cm-md-blank-selected': {
+    backgroundImage:
+      'linear-gradient(to right, var(--selection) 0, var(--selection) 0.5em, transparent 0.5em)',
+  },
 
   // Headings keep the document's rhythm: the sizes step down, and the weight carries the emphasis.
   '.cm-md-heading': { fontWeight: '650', lineHeight: '1.35' },
@@ -175,6 +196,51 @@ const theme = EditorView.theme({
   // apart when one of them is adjusted.
   '.cm-copy-code': { marginTop: CHIP_INSET_Y, marginRight: CHIP_INSET_X },
 
+  // The markdown behind a table, when somebody asks to see it. A card like a code block's, made the
+  // same way - one band painted across the lines the rows are written on - and, like a code block's,
+  // as wide as what is in it rather than running to the edge of the pane. The width itself is set
+  // per line by livePreview, which can work it out in `ch` rather than measuring: see the note there.
+  //
+  // Monospace is not decoration here, it is the whole reason the columns line up. The padding
+  // `renderTable` writes into the source is counted in characters, and only a font whose characters
+  // are all one width turns that into columns that agree on the screen.
+  '.cm-md-table': {
+    boxSizing: 'border-box',
+    fontFamily: MONO,
+    fontSize: '0.875em',
+    lineHeight: '1.6',
+    background: 'var(--surface)',
+    borderLeft: '1px solid var(--border)',
+    borderRight: '1px solid var(--border)',
+    padding: '0 0.85rem',
+
+    // The limit on the width above: a table wider than the pane stops at the pane, and its lines
+    // wrap rather than pushing the note sideways.
+    maxWidth: '100%',
+  },
+
+  '.cm-md-table-open': {
+    fontWeight: '650',
+    color: 'var(--text)',
+    borderTop: '1px solid var(--border)',
+    borderTopLeftRadius: '8px',
+    borderTopRightRadius: '8px',
+    paddingTop: '0.45rem',
+  },
+
+  // The `|---|` row. Kept rather than hidden - it is what somebody edits to change an alignment by
+  // hand - but drawn faint, so it reads as the rule between the header and the body that it is.
+  '.cm-md-table-rule': { color: 'var(--faint)' },
+
+  '.cm-md-table-close': {
+    borderBottom: '1px solid var(--border)',
+    borderBottomLeftRadius: '8px',
+    borderBottomRightRadius: '8px',
+    paddingBottom: '0.45rem',
+  },
+
+  '.cm-md-table-mark': { color: 'var(--faint)' },
+
   // A finger needs more of the button than a pointer does, and the chip grows with it or the line
   // they share stops being a line. See the matching rule in index.css.
   '@media (pointer: coarse)': {
@@ -206,7 +272,19 @@ const theme = EditorView.theme({
 interface MarkdownEditorProps {
   value: string;
   onChange: (value: string) => void;
+  /**
+   * Where the editor reports something it could not do - a clipboard the browser will not let the
+   * app read, say. Optional, because everything in here works without it; nothing is refused for the
+   * want of somewhere to say so.
+   */
+  onNotice?: (message: string) => void;
 }
+
+/** How long a finger has to stay still on the text before the context menu opens under it. */
+const LONG_PRESS_MS = 500;
+
+/** How far it may drift in that time and still count as a press rather than a scroll or a drag. */
+const LONG_PRESS_SLOP = 10;
 
 /**
  * The note editor. One CodeMirror view, no modes - see livePreview.ts for how the rendering works.
@@ -215,13 +293,83 @@ interface MarkdownEditorProps {
  * and, more importantly, the undo history, which must never let one note's undo stack reach into
  * another's text.
  */
-export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
+export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   // The editor is created once, so its update listener would capture the first onChange forever.
   const latestOnChange = useRef(onChange);
   latestOnChange.current = onChange;
+  const latestOnNotice = useRef(onNotice);
+  latestOnNotice.current = onNotice;
+
+  /**
+   * Opens the menu over whatever was clicked or held.
+   *
+   * The cursor is moved there first when the click landed outside the selection, which is what makes
+   * the commands apply to what was pointed at rather than to wherever the user was last typing. A
+   * click inside a selection leaves it alone - cutting the thing you had just selected is the point
+   * of the menu - and so does a click inside a drawn table: the cell already said which table this is
+   * about (`tableState.ts`), and moving the editor's cursor into the markdown underneath a table
+   * would be moving it into text that is not on the screen.
+   */
+  const open = (x: number, y: number, target: EventTarget | null) => {
+    const editor = view.current;
+    if (!editor) {
+      return;
+    }
+
+    if (!(target instanceof Element && target.closest('.cm-table'))) {
+      const at = editor.posAtCoords({ x, y });
+      const selection = editor.state.selection.main;
+      if (at !== null && (at < selection.from || at > selection.to)) {
+        editor.dispatch({ selection: { anchor: at } });
+      }
+    }
+
+    setMenu({ x, y, items: editorMenu(editor, (message) => latestOnNotice.current?.(message)) });
+  };
+
+  /**
+   * The same menu on a touchscreen, where there is no right-click. Held rather than tapped, and
+   * abandoned the moment the finger moves - a drag is a scroll or a selection, and stealing either of
+   * those to make a menu work would be a bad trade.
+   *
+   * Android fires `contextmenu` on a long press as well, so it can arrive twice; the second one finds
+   * the timer already cleared and opens the same menu at the same place.
+   *
+   * These are React handlers on the editor's container rather than CodeMirror's own, because a drawn
+   * table is a widget that tells CodeMirror to ignore its events - and a right-click on a table cell
+   * is exactly the event that must not be ignored.
+   */
+  const pressing = useRef(0);
+  const pressAt = useRef({ x: 0, y: 0 });
+  const cancelPress = () => window.clearTimeout(pressing.current);
+
+  const onTouchStart = (event: React.TouchEvent) => {
+    cancelPress();
+    const touch = event.touches[0];
+    if (!touch || event.touches.length > 1) {
+      return;
+    }
+
+    pressAt.current = { x: touch.clientX, y: touch.clientY };
+    const { x, y } = pressAt.current;
+    const target = event.target;
+    pressing.current = window.setTimeout(() => open(x, y, target), LONG_PRESS_MS);
+  };
+
+  const onTouchMove = (event: React.TouchEvent) => {
+    const touch = event.touches[0];
+    if (
+      !touch ||
+      Math.abs(touch.clientX - pressAt.current.x) > LONG_PRESS_SLOP ||
+      Math.abs(touch.clientY - pressAt.current.y) > LONG_PRESS_SLOP
+    ) {
+      cancelPress();
+    }
+  };
 
   useEffect(() => {
     const state = EditorState.create({
@@ -235,6 +383,9 @@ export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
         codeWidths,
         livePreview,
         copyCode,
+        tables,
+        tableView,
+        tableControls,
         theme,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -249,6 +400,7 @@ export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
     editor.focus();
 
     return () => {
+      cancelPress();
       editor.destroy();
       view.current = null;
     };
@@ -273,5 +425,22 @@ export function MarkdownEditor({ value, onChange }: MarkdownEditorProps) {
     }
   }, [value]);
 
-  return <div className="editor-surface" ref={host} />;
+  return (
+    <>
+      <div
+        className="editor-surface"
+        ref={host}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          cancelPress();
+          open(event.clientX, event.clientY, event.target);
+        }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={cancelPress}
+        onTouchCancel={cancelPress}
+      />
+      {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+    </>
+  );
 }

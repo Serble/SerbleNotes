@@ -1,3 +1,4 @@
+import { randomId } from './ids';
 import { apiUrl } from './platform';
 import type {
   ChangesResponse,
@@ -17,7 +18,7 @@ const DEVICE_KEY = 'serblenotes.deviceId';
 export function deviceId(): string {
   let id = localStorage.getItem(DEVICE_KEY);
   if (!id) {
-    id = crypto.randomUUID();
+    id = randomId();
     localStorage.setItem(DEVICE_KEY, id);
   }
   return id;

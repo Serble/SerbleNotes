@@ -35,3 +35,21 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Reading the clipboard back, which is a harder thing to be allowed to do than writing to it: the
+ * page is asking for something the user put there for somebody else, so browsers gate it behind a
+ * secure context and, in some of them, a permission prompt. There is no old `execCommand` route to
+ * fall back on - it was removed for exactly that reason.
+ *
+ * Null therefore means "this app cannot read the clipboard here", not "the clipboard is empty", and
+ * the caller has to say so: the keyboard shortcut and the platform's own paste still work, and
+ * telling somebody that is more use than a menu item that quietly does nothing.
+ */
+export async function readText(): Promise<string | null> {
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return null;
+  }
+}

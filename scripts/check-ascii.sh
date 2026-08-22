@@ -19,7 +19,7 @@ matches=$(grep -rnP '[^\x00-\x7F]' \
     --include="*.svg" \
     --include="*.sh" --include=".gitignore" \
     . 2>/dev/null \
-  | grep -vE '/(node_modules|target|pkg|wwwroot|obj|bin|Migrations|\.git|\.idea)/' \
+  | grep -vE '/(node_modules|target|pkg|wwwroot|obj|bin|Migrations|\.git|\.claude|\.idea)/' \
   | grep -vE 'package-lock\.json|Cargo\.lock' \
   | grep -vE '^\./SerbleNotes\.App/src-tauri/gen/' \
   | grep -vE '^\./SerbleNotes\.Core/tests/')
