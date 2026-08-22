@@ -1,0 +1,31 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the app's own webview is allowed to ask the shell to do. Nothing here reaches outside the app except handing the sign-in URL to the system browser.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "deep-link:default",
+    {
+      "identifier": "dialog:allow-open",
+      "description": "Ask the OS for a zip archive to import a vault from. Only open and save are granted, not the plugin's message and confirm dialogs - questions are asked in the app's own dialogs, which can be styled, keyed and tested."
+    },
+    {
+      "identifier": "dialog:allow-save",
+      "description": "Ask the OS where to write an exported vault."
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "description": "Read the archive the user picked. No path scope is granted here on purpose: with none, this can read nothing at all, and the dialog plugin adds the one file the user chose for the rest of the session. The app can therefore only ever read what someone pointed it at."
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "description": "Write the exported archive to the file the save dialog returned, under the same rule: the dialog grants the path, not this."
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "description": "Hand the Serble sign-in page to the system browser, and nothing else. The permission on its own only enables the command; the URL must also fall inside a scope, and with no scope granted every URL is refused - which is what stopped sign-in working the first time. Signing in through the real browser rather than a webview we control is the point, so the app never sees the Serble password. Widen this only if something else genuinely needs opening; links inside notes are not clickable today.",
+      "allow": [{ "url": "https://serble.net/oauth/*" }]
+    }
+  ]
+}

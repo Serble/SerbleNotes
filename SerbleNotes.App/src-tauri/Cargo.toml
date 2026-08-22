@@ -1,0 +1,42 @@
+[package]
+name = "serblenotes-app"
+version = "0.1.0"
+description = "Serble Notes desktop and mobile client"
+authors = ["CoPokBl"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# The Android and iOS builds link the app as a library; `staticlib` and `cdylib` are what those
+# toolchains ask for, and `rlib` is what the desktop binary in main.rs links against.
+name = "serblenotes_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-opener = "2"
+# Exporting and importing a vault as a zip. The dialog picks the file and the filesystem plugin
+# reads or writes exactly the one the user picked - a webview download would be at the mercy of the
+# engine underneath, and on Android the picker hands back a content URI that only this plugin can
+# open. Neither of them ever sees a note: the archive is built and read in the webview.
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# The desktop keychain: Keychain on macOS, Credential Manager on Windows, Secret Service on Linux.
+# The Linux backend is the async one deliberately - it talks D-Bus through zbus, which is pure Rust,
+# where the sync backend links libdbus and would put a C library between us and building at all.
+keyring = { version = "3", features = [
+  "apple-native",
+  "windows-native",
+  "async-secret-service",
+  "tokio",
+  "crypto-rust",
+] }
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }

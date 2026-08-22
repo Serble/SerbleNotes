@@ -1,0 +1,6 @@
+# Real settings live here and are never committed: the Serble client secret, the JWT signing key
+# and the database password. The committed appsettings.json holds placeholders for all three.
+appsettings.Development.json
+appsettings.Production.json
+appsettings.Local.json
+appsettings.*.Local.json

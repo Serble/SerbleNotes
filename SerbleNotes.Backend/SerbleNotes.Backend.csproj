@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <SpaRoot>..\SerbleNotes.App\</SpaRoot>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11"/>
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11"/>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.11">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0"/>
+    </ItemGroup>
+
+    <!-- The web client is served by this app out of wwwroot, so publishing the backend has to build
+         it first. `_IsPublishing` keeps it publish-only: a plain `dotnet build` stays pure .NET, so
+         the backend dev loop never waits on npm. The frontend build also compiles the Rust core to
+         WASM (see its build script).
+
+         The hook must run before ResolveStaticWebAssetsInputs, not before PrepareForPublish. The SDK
+         precompresses wwwroot into .gz/.br during the static web asset pass; hooking in after that
+         pass publishes compressed copies of the PREVIOUS build, and anything that serves them —
+         MapStaticAssets, or nginx gzip_static in front — then hands clients stale HTML. -->
+    <Target Name="BuildWebClient" BeforeTargets="ResolveStaticWebAssetsInputs"
+            Condition="'$(_IsPublishing)' == 'true' and '$(SkipWebClientBuild)' != 'true'">
+        <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" Condition="!Exists('$(SpaRoot)node_modules')"/>
+        <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)"/>
+    </Target>
+
+</Project>

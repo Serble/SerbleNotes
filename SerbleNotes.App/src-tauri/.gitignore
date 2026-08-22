@@ -1,0 +1,13 @@
+# Build output and the generated mobile projects' throwaway parts.
+/target/
+
+# Written by the Tauri CLI on every build: about 1.3MB of JSON describing what each plugin's
+# permissions allow. `capabilities/default.json` points its `$schema` at one of these, so an editor
+# in a fresh clone will not resolve it until the first `npm run desktop` or `desktop:build` puts it
+# back. The build never reads them - it writes them - so nothing else is affected.
+/gen/schemas/
+
+# Signing material must never be committed. See the release notes in CLAUDE.md.
+*.keystore
+*.jks
+keystore.properties

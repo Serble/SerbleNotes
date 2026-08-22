@@ -1,0 +1,6 @@
+node_modules/
+dist/
+
+# Vite's local cache and TypeScript's incremental state.
+.vite/
+*.tsbuildinfo

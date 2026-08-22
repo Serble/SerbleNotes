@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256" role="img"
+     aria-labelledby="serble-notes-title serble-notes-desc">
+  <title id="serble-notes-title">Serble Notes</title>
+  <desc id="serble-notes-desc">A page whose top edge breaks for the stem of a power symbol, with two
+    lines of writing inside it.</desc>
+  <!--
+    The product mark, and the one copy of it that leaves this app: it is served at /icon.svg for
+    anyone embedding it elsewhere, and it is the browser tab's icon. The same drawing lives once
+    more as LogoIcon in src/components/Icons.tsx, on a 24 grid; change one and change the other.
+
+    One fixed blue rather than the app's usual pair. The light accent is for a dark ground and the
+    deep one for a light ground, but an embedded icon does not know what it has been put on: a media
+    query here would follow the *viewer's* OS theme, which is unrelated to the page it sits on, and
+    get it wrong half the time. The deep blue is the one that reads on both, at about 4.6:1 on white
+    and 3.5:1 on a dark tab strip.
+  -->
+  <g fill="none" stroke="#2f6feb" stroke-width="5.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M38 10H46A8 8 0 0 1 54 18V46A8 8 0 0 1 46 54H18A8 8 0 0 1 10 46V18A8 8 0 0 1 18 10H26" />
+    <path d="M32 7V25" />
+    <path d="M20 36H44" />
+    <path d="M20 45H36" />
+  </g>
+</svg>

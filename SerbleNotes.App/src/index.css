@@ -1,0 +1,1378 @@
+/*
+ * Serble Notes.
+ *
+ * One theme, deliberately quiet: the chrome is near-monochrome so that the note - the only thing on
+ * screen the user wrote - is the brightest thing on it. Colour marks state (unsaved, encrypted or
+ * not, refused) and nothing else, and there is at most one filled button on any screen.
+ *
+ * Everything the CodeMirror theme in components/MarkdownEditor.tsx reads is a token declared here:
+ * --text, --muted, --accent, --surface, --surface-2, --border. Renaming one changes the editor too.
+ */
+
+:root {
+  --bg: #0b0e12;
+  --surface: #11151a;
+  --surface-2: #171c22;
+  --raised: #1c222a;
+
+  /* Hover and press are light films rather than new colours, so they work over any of the above. */
+  --hover: rgba(255, 255, 255, 0.045);
+  --active: rgba(255, 255, 255, 0.08);
+
+  --border: #212831;
+  --border-2: #2c343f;
+
+  --text: #e7ecf2;
+  --text-2: #b3bdc9;
+  --muted: #7e8994;
+  --faint: #5a636e;
+
+  /* Two blues on purpose: the light one is for text and marks on a dark ground, the deep one is a
+     fill that white text actually reads on. Using one for both fails contrast at one end or other. */
+  --accent: #74a4ff;
+  --accent-fill: #2f6feb;
+  --accent-fill-hover: #3d7cf5;
+  --on-accent: #ffffff;
+
+  --danger: #ff6b70;
+  --danger-fill: #b8383d;
+  --danger-fill-hover: #c94247;
+  --warning: #e5b95c;
+  --good: #62c37a;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-lg: 10px;
+  --shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --control: 32px;
+  --control-sm: 27px;
+
+  --sidebar: 262px;
+  --rail: 320px;
+
+  color-scheme: dark;
+}
+
+/* A finger is not a mouse pointer. Every control grows to a real target where there is no hover. */
+@media (pointer: coarse) {
+  :root {
+    --control: 44px;
+    --control-sm: 38px;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+
+  /* iOS Safari and the Android WebView both do this on a double tap; the app has no zoom to gain
+     from it, and it makes every tap feel 300ms late. */
+  -webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: 1.05rem; }
+h2 { font-size: 1rem; }
+h3 { font-size: 0.9rem; }
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ---------------------------------------------------------------- controls */
+
+button {
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: var(--control);
+  padding: 0 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.4rem;
+  background: none;
+  color: var(--text-2);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+:where(button, a, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 1px;
+}
+
+/* The default button is bare: a label that lights up under the pointer. Boxes are reserved for the
+   one action on a screen that matters, so that when a box appears it means something. */
+.ghost:hover:not(:disabled),
+.icon:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ghost:active:not(:disabled),
+.icon:active:not(:disabled) {
+  background: var(--active);
+}
+
+/* Pressed state for the panel toggles, which stay on. */
+.ghost.on {
+  background: var(--active);
+  color: var(--text);
+}
+
+.primary {
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  justify-content: center;
+}
+.primary:hover:not(:disabled) { background: var(--accent-fill-hover); }
+
+.outline {
+  border-color: var(--border-2);
+  color: var(--text);
+}
+.outline:hover:not(:disabled) { background: var(--hover); }
+
+.danger-solid { background: var(--danger-fill); }
+.danger-solid:hover:not(:disabled) { background: var(--danger-fill-hover); }
+
+.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.small {
+  font-size: 0.8rem;
+  min-height: var(--control-sm);
+  padding: 0 0.5rem;
+}
+
+.icon {
+  padding: 0;
+  width: var(--control);
+  min-width: var(--control);
+  justify-content: center;
+  color: var(--muted);
+}
+
+.full {
+  width: 100%;
+  justify-content: center;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 0 0.65rem;
+  min-height: var(--control);
+  width: 100%;
+
+  /* Under 16px, iOS zooms the page when a field takes focus and never zooms back out. */
+  font-size: max(15px, 1rem);
+}
+
+textarea { padding: 0.5rem 0.65rem; }
+
+input::placeholder { color: var(--faint); }
+input:focus,
+textarea:focus {
+  border-color: var(--accent-fill);
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: -1px;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-2);
+}
+label input { margin-top: 0.35rem; }
+
+label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text);
+  font-size: 0.9rem;
+  min-height: var(--control);
+}
+label.checkbox input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent-fill);
+}
+
+/* ---------------------------------------------------------------- utility */
+
+.muted { color: var(--muted); }
+.error { color: var(--danger); }
+.warning { color: var(--warning); }
+p.small, span.small, .small { font-size: 0.82rem; }
+
+.row { display: flex; align-items: center; gap: 0.5rem; }
+.row.end { justify-content: flex-end; margin-top: 1.1rem; }
+.row.between { justify-content: space-between; }
+
+/* A message that belongs to the thing above it, boxed so it is not mistaken for body copy. */
+.notice {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+.error.notice { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.warning.notice { border-color: color-mix(in srgb, var(--warning) 35%, transparent); }
+
+/* A message about the whole screen, spanning it. */
+.banner {
+  margin: 0;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.open {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.wide-only { display: inline; }
+.narrow-only { display: none !important; }
+
+.centred-text { text-align: center; margin-top: 3rem; }
+
+/* ---------------------------------------------------------------- shell */
+
+.shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  min-height: 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.app-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.app-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.app-bar-left h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 0.35rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-left: 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.brand svg { color: var(--muted); }
+
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  padding-right: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.save-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--faint);
+}
+.save-state.saving { color: var(--accent); }
+.save-state.saving .save-dot {
+  background: var(--accent);
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  50% { opacity: 0.2; }
+}
+
+/* ---------------------------------------------------------------- vault list */
+
+.page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.page-head h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.15rem;
+}
+.page-head p { margin: 0; max-width: 42ch; }
+
+.vault-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.vault-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  padding-right: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.vault-row:last-child { border-bottom: none; }
+.vault-row:hover { background: var(--hover); }
+
+.vault-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.85rem 0.5rem 0.85rem 0.9rem;
+  border-radius: 0;
+  color: var(--text);
+  text-align: left;
+}
+.vault-open:hover { background: none; }
+.vault-open > svg { color: var(--faint); flex-shrink: 0; }
+
+.vault-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+/* Not a decoration: this is the one glance that says whether the server can read the vault. */
+.vault-mark.open {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.vault-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.vault-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Drawn rather than written: a full stop between two phrases reads as punctuation, and the ASCII
+   rule rules out a middot. */
+.vault-meta .sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--faint);
+  align-self: center;
+}
+
+.vault-row .icon {
+  align-self: center;
+  color: var(--faint);
+}
+
+/* An empty state is a place to start, not an apology. */
+.editor > .empty { margin: auto; border: none; }
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+  padding: 3rem 1.5rem;
+  margin: 0 auto;
+  max-width: 34rem;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius-lg);
+}
+.empty > svg { color: var(--faint); }
+.empty h2 { margin-top: 0.35rem; }
+.empty p { margin: 0; max-width: 34ch; }
+.empty button { margin-top: 0.8rem; }
+
+/* ---------------------------------------------------------------- centred cards */
+
+.centred {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+}
+
+.hero {
+  width: min(400px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.hero h1 { font-size: 1.3rem; letter-spacing: -0.02em; }
+.hero p { margin: 0.25rem 0 0; }
+.hero label { margin-bottom: 0; }
+
+.hero-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+/* ---------------------------------------------------------------- workspace */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.columns {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.sidebar {
+  width: var(--sidebar);
+  flex-shrink: 0;
+  max-width: 100%;
+  display: flex;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* Padding on a border-box element is a size it can never go below, so the column that gets dragged
+   and the box that holds the padding have to be two different elements. Dragged shut, this one is
+   clipped away and the column is left as its own 1px border. */
+.sidebar-inner {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.6rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.sidebar-head {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0.25rem 0.35rem;
+}
+.sidebar-head h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.editor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-surface {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1rem 1.5rem;
+}
+.editor-surface .cm-editor { height: 100%; }
+
+/* The bar above the editor: where the note is, what it is called, and what can be done to it. */
+.note-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.note-bar-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+}
+
+.note-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.note-bar-note { flex-basis: 100%; margin: 0.35rem 0 0; }
+
+.path-input {
+  border: 1px solid transparent;
+  background: none;
+  padding: 0.1rem 0.4rem;
+  margin-left: -0.4rem;
+  min-height: 0;
+  font-size: 1.3rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  border-radius: var(--radius);
+}
+.path-input:hover { background: var(--hover); }
+.path-input:focus {
+  background: var(--bg);
+  border-color: var(--accent-fill);
+}
+
+/* ---------------------------------------------------------------- side rail */
+
+/*
+ * The rail is a darker trough and each panel is a card in it, with a real gap between them: two
+ * panels separated by a single hairline read as one long list with a heading in the middle.
+ *
+ * Nothing in the rail scrolls. Each panel scrolls its own body instead, which is what lets the
+ * boundary between them be dragged - the details panel keeps whatever height it is given and its
+ * contents move inside it.
+ */
+.rail {
+  width: var(--rail);
+  flex-shrink: 0;
+  max-width: 100%;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* Same reason as .sidebar-inner: the padding cannot sit on the thing being resized. */
+.rail-inner {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+.workspace[data-rail='shut'] .rail { display: none; }
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+/* By default a panel is as tall as what is in it; the one holding a list takes what is left. */
+.panel-scrolls { flex: 1 1 0; }
+
+/* Once its boundary has been dragged, the details panel holds that height instead. */
+.panel-pinned { flex: 0 0 var(--details, auto); }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.4rem 0.4rem 0.4rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.panel-head h3 {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.panel-head-actions { display: flex; align-items: center; gap: 0.2rem; }
+
+.panel-body {
+  padding: 0.7rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.panel-rows {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.panel-rows + .panel-rows { margin-top: 0.6rem; }
+
+.panel-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  font-size: 0.83rem;
+  border-bottom: 1px solid var(--border);
+}
+.panel-row:last-child { border-bottom: none; }
+
+.panel-row-label { color: var(--muted); flex-shrink: 0; }
+.panel-row-value {
+  min-width: 0;
+  text-align: right;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- history */
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: var(--radius);
+  padding-right: 0.25rem;
+}
+.history-item:hover { background: var(--hover); }
+.history-item.current { background: var(--surface-2); }
+.history-item.previewing {
+  outline: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.history-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  color: var(--text-2);
+}
+
+.history-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+}
+.history-when { font-size: 0.83rem; color: var(--text); }
+.history-kind {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.history-label {
+  font-size: 0.82rem;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.history-current { font-size: 0.72rem; color: var(--muted); }
+
+/* ---------------------------------------------------------------- older version */
+
+.version-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.version-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+.version-bar-text { display: flex; flex-direction: column; }
+.version-bar-title { font-size: 0.9rem; font-weight: 600; }
+
+.version-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+/* ---------------------------------------------------------------- splitters */
+
+/*
+ * A draggable boundary. The column ones are absolutely positioned rather than sitting in the flex
+ * row, so a 9px grab area costs the layout nothing: the visible seam stays the column's own 1px
+ * border, and the editor does not shift by the width of the handle.
+ */
+.splitter {
+  z-index: 3;
+  background: none;
+
+  /* Without this a touch drag scrolls the page instead of moving the boundary. */
+  touch-action: none;
+}
+
+.splitter-x {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+}
+
+/*
+ * There is no limit on how far a column can be dragged, including shut - but a handle that follows
+ * it off the edge of the window could never be used to drag it back. So the size is the user's and
+ * the handle's position is clamped to stay reachable.
+ */
+.splitter-left { left: clamp(0px, calc(var(--sidebar) - 4px), calc(100% - 9px)); }
+.splitter-right { right: clamp(0px, calc(var(--rail) - 4px), calc(100% - 9px)); }
+
+/* The shelf between two stacked panels sits in the flow, taking up the rail's own gap. */
+.splitter-y {
+  position: relative;
+  flex: 0 0 auto;
+  height: 9px;
+  margin: -0.5rem 0;
+  cursor: row-resize;
+}
+
+/* The line that lights up is inside the handle, so what is grabbable is wider than what is seen. */
+.splitter::after {
+  content: '';
+  position: absolute;
+  background: none;
+  transition: background 0.12s ease;
+}
+.splitter-x::after { inset: 0 4px; }
+.splitter-y::after { inset: 4px 0; }
+
+.splitter:hover::after,
+.splitter:focus-visible::after { background: var(--accent); }
+.splitter:focus-visible { outline: none; }
+
+/* Set on the body for the length of a drag: a splitter that selects the editor's text on the way
+   past, and flickers between the resize cursor and a text caret, feels broken. */
+body.resizing {
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.resizing-x { cursor: col-resize; }
+body.resizing-y { cursor: row-resize; }
+
+/* The pointer is captured by the handle, but the cursor is still decided by whatever is under it. */
+body.resizing * { cursor: inherit; }
+
+/* ---------------------------------------------------------------- scrim */
+
+/* Only ever seen on a narrow screen, where the drawers sit over the editor rather than beside it. */
+.scrim {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  padding: 0;
+  min-height: 0;
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------- file manager */
+
+.notes-tools { display: flex; gap: 0.3rem; }
+.notes-tools button { flex: 1; justify-content: center; }
+/* The collapse-all toggle is a square at the end of the row, not a third of it. */
+.notes-tools .icon { flex: 0 0 var(--control); }
+
+.notes-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--faint);
+}
+.notes-filter input {
+  border: none;
+  background: none;
+  padding: 0;
+  min-height: var(--control-sm);
+  font-size: 0.88rem;
+}
+.notes-filter input:focus { outline: none; }
+.notes-filter:focus-within {
+  border-color: var(--accent-fill);
+  color: var(--muted);
+}
+
+/* Grows to fill the sidebar so the empty space below the last row is still a drop target for the
+   top level - dragging something out of every folder needs somewhere to aim at. */
+.tree {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 5rem;
+  margin-top: 0.2rem;
+}
+.tree.drop-root {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  border-radius: var(--radius);
+  padding-right: 0.15rem;
+}
+.tree-row:hover { background: var(--hover); }
+.tree-row.selected { background: var(--surface-2); }
+.tree-row.selected .tree-name { color: var(--text); font-weight: 550; }
+.tree-row.folder { color: var(--muted); }
+.tree-row.drop-into {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  outline: 1px solid var(--accent);
+}
+.tree-row.renaming { gap: 0.35rem; padding: 0 0.2rem; color: var(--text); }
+
+.tree-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: left;
+  min-height: 0;
+  padding: 0.28rem 0.2rem;
+  font-size: 0.88rem;
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+/* Holds the chevron's width on rows that have no chevron, so names line up down the column. */
+.tree-twist {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+}
+
+.tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tree-rename {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--control-sm);
+  padding: 0 0.35rem;
+  font-size: 0.88rem;
+}
+
+.tree-empty { margin: 0; padding: 0.15rem 0; font-size: 0.8rem; color: var(--faint); }
+
+.tree-row .icon {
+  opacity: 0;
+  width: 26px;
+  min-width: 26px;
+  min-height: 26px;
+}
+.tree-row:hover .icon,
+.tree-row.selected .icon,
+.tree-row:focus-within .icon { opacity: 1; }
+
+
+.context-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 200px;
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--raised);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.context-item {
+  justify-content: flex-start;
+  gap: 0.55rem;
+  padding: 0 0.55rem;
+  font-size: 0.88rem;
+  font-weight: 400;
+  color: var(--text);
+}
+.context-item:hover { background: var(--hover); }
+.context-item.danger { color: var(--danger); }
+
+/* The folders a note sits in, shown above its name rather than typed into it. */
+.crumbs {
+  min-height: 0;
+  padding: 0.1rem 0.4rem;
+  margin-left: -0.4rem;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  max-width: 100%;
+  overflow: hidden;
+}
+.crumbs:hover { background: var(--hover); color: var(--text-2); }
+.crumbs svg { flex-shrink: 0; color: var(--faint); }
+.crumb { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
+
+.crumbs.inline { margin-left: 0; padding: 0 0.3rem; font-size: 0.83rem; }
+
+.move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.move-row {
+  justify-content: flex-start;
+  gap: 0.55rem;
+  padding: 0 0.5rem;
+  font-weight: 400;
+  text-align: left;
+}
+.move-row:hover:not(:disabled) { background: var(--hover); }
+.move-row.here { color: var(--muted); }
+.move-label { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- dialogs */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+  width: min(430px, 100%);
+  max-height: min(90vh, 90dvh);
+  overflow-y: auto;
+}
+.modal.wide { width: min(640px, 100%); }
+
+.modal-head { margin-bottom: 1rem; }
+.modal-head h2 { font-size: 1.05rem; }
+.modal-body { margin: 0 0 1rem; color: var(--text-2); }
+.modal-list {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: var(--text-2);
+}
+
+/* An archive can hold hundreds of files, and the list of what happened to each of them must not
+   push the dialog's own buttons off the bottom of the screen. */
+.archive-list {
+  max-height: 11rem;
+  overflow-y: auto;
+  word-break: break-word;
+}
+.archive-list code { font-size: 0.85em; }
+
+/* The copy button on a code block. The same object in the editor and in a rendered preview, so it
+   is one rule: copyCode.ts positions the editor's over the block it belongs to, and the preview
+   puts one in the corner of each `.code-block` wrapper. Small and quiet - it is a control sitting on
+   top of the note, and the note is the thing being read. */
+.copy-code {
+  position: absolute;
+  z-index: 2;
+  min-height: 0;
+  padding: 0.16rem 0.5rem;
+  font-family: var(--sans);
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.copy-code:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+.copy-code.done {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+}
+.copy-code.failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.copy-code[hidden] { display: none; }
+
+/* A finger needs more of it than a pointer does. */
+@media (pointer: coarse) {
+  .copy-code { padding: 0.3rem 0.7rem; font-size: 0.75rem; }
+}
+
+/* The card is as wide as the block needs and no wider, up to the width of the pane, at which point
+   its lines wrap - the same shape the editor gives a block, worked out there by measuring because a
+   code block there is one element per line. Here it is one element, so this is the whole of it.
+   `min-width` is set from MarkdownPreview.tsx: it is the width of the copy button, which has to have
+   somewhere to sit that is not on top of the code. */
+.code-block {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+}
+.code-block > .copy-code { top: 0.45rem; right: 0.45rem; }
+
+/* ---------------------------------------------------------------- rendered markdown */
+
+/* No width cap here either - see .cm-content in MarkdownEditor.tsx. A note reads the same width in
+   the editor and in a preview of an older version of it, and both are as wide as the pane. */
+.markdown :first-child { margin-top: 0; }
+
+/* A code block fills the width and wraps, the same as every line in the editor does. Wrapping rather
+   than scrolling sideways because a line you cannot see is worse than a line that takes two rows,
+   and `anywhere` because the thing that overflows is usually one unbreakable token - a URL, a hash -
+   which a normal word break would leave hanging off the edge. */
+.markdown pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.markdown code { font-family: var(--mono); font-size: 0.88em; }
+.markdown blockquote {
+  margin: 0.8rem 0;
+  padding-left: 0.9rem;
+  border-left: 3px solid var(--border-2);
+  color: var(--muted);
+}
+.markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
+.markdown th,
+.markdown td { border: 1px solid var(--border); padding: 0.35rem 0.6rem; }
+.markdown img { max-width: 100%; }
+.markdown a { color: var(--accent); }
+
+/* ---------------------------------------------------------------- password strength */
+
+/* Informative, never a gate. Colours mark severity; nothing here disables anything. */
+.strength { margin: -0.5rem 0 0.85rem; display: flex; flex-direction: column; gap: 0.35rem; }
+
+.strength-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.strength-fill { height: 100%; border-radius: 999px; transition: width 0.15s ease, background 0.15s ease; }
+.strength-fill.none,
+.strength-fill.very-weak { background: var(--danger); }
+.strength-fill.weak { background: #e8833a; }
+.strength-fill.fair { background: var(--warning); }
+.strength-fill.strong { background: var(--good); }
+.strength-fill.very-strong { background: #3fae7a; }
+
+.strength-summary { margin: 0; font-size: 0.8rem; color: var(--muted); }
+.strength-label { text-transform: capitalize; font-weight: 600; }
+.strength-label.none,
+.strength-label.very-weak { color: var(--danger); }
+.strength-label.weak { color: #e8833a; }
+.strength-label.fair { color: var(--warning); }
+.strength-label.strong,
+.strength-label.very-strong { color: var(--good); }
+
+.strength-notes {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+/* ---------------------------------------------------------------- narrow screens */
+
+/* The rail goes first: it is the widest thing to lose, and an editor squeezed to nothing between
+   two columns is worse than a panel that has to be opened. */
+@media (max-width: 1100px) {
+  /* A drawer is sized against the viewport, so there is no boundary to drag. */
+  .splitter-right { display: none; }
+  .splitter-y { display: none; }
+  .panel-pinned { flex: 0 0 auto; }
+
+  .rail {
+    position: absolute;
+    z-index: 5;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--rail), 90vw);
+    border-left: 1px solid var(--border-2);
+    box-shadow: var(--shadow);
+  }
+  .workspace[data-rail='open'] .scrim { display: block; }
+}
+
+/* Two short lines beat one that wraps mid-phrase and leaves a separator dangling on the turn. */
+@media (max-width: 520px) {
+  .vault-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.05rem;
+  }
+  .vault-meta .sep { display: none; }
+}
+
+@media (max-width: 860px) {
+  .wide-only { display: none; }
+  .narrow-only { display: inline-flex !important; }
+
+  .app-bar { padding: 0.35rem 0.5rem; }
+  .app-bar-left h1 { font-size: 1rem; }
+
+  .page { padding: 1.25rem 0.9rem 2.5rem; }
+  .page-head { flex-direction: column; align-items: stretch; }
+  .page-head button { width: 100%; }
+
+  .splitter-left { display: none; }
+
+  .sidebar {
+    position: absolute;
+    z-index: 5;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    border-right: 1px solid var(--border-2);
+    box-shadow: var(--shadow);
+    transform: translateX(-100%);
+    transition: transform 0.16s ease;
+  }
+  .workspace[data-nav='open'] .sidebar { transform: none; }
+  .workspace[data-nav='open'] .scrim { display: block; }
+
+  .sidebar-head { display: flex; }
+
+  .note-bar { padding: 0.6rem 0.9rem 0.5rem; }
+  .editor-surface { padding: 0.85rem 0.9rem 1rem; }
+  .version-bar,
+  .version-body { padding-left: 0.9rem; padding-right: 0.9rem; }
+  .path-input { font-size: 1.15rem; }
+
+  /* Hover is not available, so anything that only appeared on hover has to be there already. */
+  .tree-row .icon { opacity: 1; }
+  .vault-open { padding: 0.75rem 0.4rem 0.75rem 0.75rem; }
+}
+
+/* Rows that are compact by design still have to be hittable where there is no pointer. */
+@media (pointer: coarse) {
+  .tree-open { min-height: 38px; }
+  .tree-row .icon { width: 38px; min-width: 38px; min-height: 38px; }
+  .crumbs { min-height: 30px; }
+  .note-bar-actions .ghost { padding: 0; width: var(--control); justify-content: center; }
+}
+
+@media (min-width: 861px) {
+  /* Collapsing belongs to the wide layout. Narrow already has a drawer, which is the same idea
+     with a different shape, and the two must not both be able to hide the tree at once. */
+  .workspace[data-tree='shut'] .sidebar { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

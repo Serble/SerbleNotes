@@ -1,0 +1,136 @@
+name: Clients
+
+# Builds the desktop and Android clients.
+#
+# The Windows installer is the reason this exists: Tauri has no supported way to cross-compile a
+# Windows app from Linux, so a Windows runner is how a Windows build gets made without owning a
+# Windows machine. Linux and Android build fine locally; they are here so a tagged release produces
+# all of them at once, from the same commit.
+#
+# VITE_SERBLE_APP_ID has to be set as a repository variable, or the built apps have no OAuth client
+# id and cannot sign in. It is not a secret - it is in the URL every sign-in goes through.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux
+          - os: windows-latest
+            name: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: SerbleNotes.App/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: SerbleNotes.App/src-tauri
+
+      # webkit2gtk is the webview, libsoup is its HTTP stack, and librsvg is what the AppImage
+      # bundler renders the icon with. Ubuntu 22.04 rather than latest because the glibc an AppImage
+      # is built against is the oldest one it will run on.
+      - name: Linux build dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libappindicator3-dev librsvg2-dev patchelf build-essential curl wget file \
+            libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Install dependencies
+        working-directory: SerbleNotes.App
+        run: npm ci
+
+      - name: Build
+        working-directory: SerbleNotes.App
+        env:
+          VITE_SERBLE_APP_ID: ${{ vars.VITE_SERBLE_APP_ID }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: npx tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          path: |
+            SerbleNotes.App/src-tauri/target/release/bundle/**/*.AppImage
+            SerbleNotes.App/src-tauri/target/release/bundle/**/*.deb
+            SerbleNotes.App/src-tauri/target/release/bundle/**/*.rpm
+            SerbleNotes.App/src-tauri/target/release/bundle/**/*.msi
+            SerbleNotes.App/src-tauri/target/release/bundle/**/*.exe
+          if-no-files-found: error
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: SerbleNotes.App/package-lock.json
+
+      # The Android Gradle Plugin follows the JDK releases some way behind, so this is pinned rather
+      # than taking whatever the runner ships.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the NDK
+        run: sdkmanager --install "ndk;27.1.12297006"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: SerbleNotes.App/src-tauri
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Install dependencies
+        working-directory: SerbleNotes.App
+        run: npm ci
+
+      # The generated project is committed, so this only fills in what the template leaves out of
+      # version control - the signing config and the local SDK paths.
+      - name: Build
+        working-directory: SerbleNotes.App
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
+          VITE_SERBLE_APP_ID: ${{ vars.VITE_SERBLE_APP_ID }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: npx tauri android build --apk --debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: SerbleNotes.App/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
