@@ -34,6 +34,16 @@ export function initCore(): Promise<void> {
   return pending;
 }
 
+// Development only, and stripped from any build. The WASM instance lives inside this module, so a
+// hot swap hands the app a fresh copy of it with nothing loaded, and the next call into the core
+// dies with "Cannot read properties of undefined (reading '__wbindgen_free')" - which names neither
+// HMR nor the core. Reloading the page is the only correct way to update this module.
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {
+    import.meta.hot?.invalidate();
+  });
+}
+
 /**
  * The core reports failures as plain strings so it can compile natively as well as to WASM. Turning
  * them into real Errors here means the rest of the app can just use try/catch normally.

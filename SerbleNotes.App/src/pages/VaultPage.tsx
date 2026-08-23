@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   BackIcon,
   CloseIcon,
@@ -26,7 +33,7 @@ import { NotePathBar } from "../components/NotePathBar";
 import { NoteTree, useCollapsedFolders } from "../components/NoteTree";
 import { PromptModal } from "../components/PromptModal";
 import { Splitter } from "../components/Splitter";
-import { merge, parentPath } from "../core";
+import { parentPath } from "../core";
 import { absolute, relative } from "../services/dates";
 import {
   DEFAULT_LAYOUT,
@@ -34,14 +41,44 @@ import {
   saveLayout,
   type Layout,
 } from "../services/layout";
+import {
+  commit,
+  opened,
+  reconcile,
+  resync,
+  typed,
+  unsaved,
+  type EditorState,
+} from "../services/noteSync";
 import { lastNoteIn, rememberNote } from "../services/settings";
 import { SyncSocket } from "../services/sync";
-import { VaultStore } from "../services/store";
+import type { VaultStore } from "../services/store";
+import { storeFor } from "../services/stores";
 import { keyFor, unlock } from "../services/vaultKeys";
 import { storageWarning } from "../services/secrets";
 import type { NoteVersion, Vault } from "../types";
 
 const AUTOSAVE_MS = 1200;
+
+/** No note open. */
+const EMPTY_EDITOR: EditorState = {
+  text: "",
+  baseline: null,
+  mergeParent: null,
+  conflicted: false,
+  status: "saved",
+  error: null,
+};
+
+/** What the indicator in the app bar says, per state. */
+const SAVE_LABEL: Record<EditorState["status"], string> = {
+  saved: "Saved",
+  saving: "Saving",
+  // Not "Saving": there are unsent changes and nothing is being sent. The edit is kept on this
+  // device and goes up when the connection comes back, which is worth saying rather than implying.
+  offline: "Offline",
+  error: "Not saved",
+};
 
 /**
  * The width below which the tree and the panels cover the editor instead of sitting beside it.
@@ -209,11 +246,10 @@ function Workspace({
   vaultKey: string;
   onBack: () => void;
 }) {
-  const storeRef = useRef<VaultStore>();
-  if (!storeRef.current) {
-    storeRef.current = new VaultStore(vault, vaultKey);
-  }
-  const store = storeRef.current;
+  // Kept for the session rather than built per visit, so coming back to a vault is a delta pull
+  // instead of downloading it again. See services/stores.ts. Through useMemo because it is a lookup
+  // with a side effect - it refreshes the store's copy of the vault row - and not a render's work.
+  const store = useMemo(() => storeFor(vault, vaultKey), [vault, vaultKey]);
 
   // The store is a mutable model rather than React state; this is how the UI is told it moved.
   const [, refresh] = useReducer((count: number) => count + 1, 0);
@@ -222,15 +258,25 @@ function Workspace({
   const collapse = useCollapsedFolders(vault.id);
 
   const [loading, setLoading] = useState(true);
+
+  /** The note whose history is being fetched, so the editor can say so instead of showing nothing. */
+  const [opening, setOpening] = useState<string | null>(null);
+
+  /** Which open request is the current one, so a slow note cannot land on top of a later choice. */
+  const openRequest = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [text, setText] = useState("");
-  const [baseline, setBaseline] = useState<string | null>(null);
-  const [pendingMergeParent, setPendingMergeParent] = useState<string | null>(
-    null,
-  );
-  const [conflicted, setConflicted] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  /**
+   * Everything about the note being edited: its text, the version that text came from, whether a
+   * merge left conflict markers in it, and whether the server has it. One object rather than five
+   * pieces of state because they only ever change together - a reconcile that moved the text
+   * without the baseline, or a save that cleared the indicator without recording what it wrote,
+   * would be a note quietly detached from its own history.
+   */
+  const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
+  const { text, conflicted } = editor;
+
+  const setText = useCallback((next: string) => setEditor((current) => typed(current, next)), []);
   const [showHistory, setShowHistory] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [previewVersion, setPreviewVersion] = useState<NoteVersion | null>(
@@ -256,139 +302,217 @@ function Workspace({
 
   // The sync callback lives outside React's render cycle, so it reads current values from refs.
   const selectedRef = useRef(selected);
-  const textRef = useRef(text);
-  const baselineRef = useRef(baseline);
+  const editorRef = useRef(editor);
   selectedRef.current = selected;
-  textRef.current = text;
-  baselineRef.current = baseline;
+  editorRef.current = editor;
 
+  /** Applies a new editor state from outside the render cycle, keeping the ref in step with it. */
+  const applyEditor = useCallback((next: EditorState) => {
+    editorRef.current = next;
+    setEditor(next);
+  }, []);
+
+  /**
+   * Opens a note, downloading its history first if this device does not have it.
+   *
+   * Opening a vault no longer brings the notes themselves with it, so this is where the bytes for
+   * one note are fetched - instantly when they are already cached, which is the common case. The
+   * text is only read after `ensureNote` resolves: reading it earlier would mean showing an empty
+   * document over a note that exists, and the autosave would then write that emptiness down.
+   */
   const openNote = useCallback(
-    (noteId: string) => {
-      setSelected(noteId);
-      rememberNote(vault.id, noteId);
-      setBaseline(store.headOf(noteId));
-      setText(store.textOf(noteId));
-      setConflicted(false);
-      setDirty(false);
-      setPreviewVersion(null);
+    async (noteId: string) => {
+      // Two notes opened in quick succession must not have their text land out of order. Only the
+      // most recent request is allowed to set state.
+      const request = openRequest.current + 1;
+      openRequest.current = request;
 
+      setOpening(noteId);
+      setPreviewVersion(null);
       // Picking a note is the point of the drawer, so it gets out of the way once you have.
       setNavOpen(false);
+
+      try {
+        await store.ensureNote(noteId);
+        if (openRequest.current !== request) {
+          return;
+        }
+
+        setSelected(noteId);
+        rememberNote(vault.id, noteId);
+        applyEditor(opened(store, noteId));
+      } catch (e: unknown) {
+        if (openRequest.current === request) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (openRequest.current === request) {
+          setOpening(null);
+        }
+      }
     },
-    [store, vault.id],
+    [store, vault.id, applyEditor],
   );
 
+  /**
+   * Brings the editor into line with the store after new versions arrive - from another device, or
+   * from the pull that follows opening a cached vault. Both are the same question: the note under
+   * the editor moved, and what is on screen may or may not have moved with it.
+   *
+   * What that question is answered *with* is `services/noteSync.ts`, which is where the fork
+   * detection and the three-way merge live and where they can be tested.
+   */
+  const reconcileNote = useCallback(async () => {
+    const noteId = selectedRef.current;
+    if (!noteId) {
+      return;
+    }
+
+    const next = await reconcile(store, noteId, editorRef.current);
+    if (next !== editorRef.current) {
+      applyEditor(next);
+    }
+  }, [store, applyEditor]);
+
   useEffect(() => {
-    store
-      .pull()
-      .then(() => {
-        const notes = store.listNotes();
+    store.onChanged = refresh;
+    return () => {
+      store.onChanged = null;
+    };
+  }, [store]);
 
-        // Where this device left off, as long as that note still exists - it can have been deleted
-        // on another device since, and an id that no longer names anything opens nothing at all.
-        const remembered = lastNoteIn(vault.id);
-        const reopen = notes.find((note) => note.id === remembered) ?? notes[0];
+  useEffect(() => {
+    let live = true;
 
-        if (reopen) {
-          openNote(reopen.id);
+    /**
+     * Where this device left off, as long as that note still exists - it can have been deleted on
+     * another device since, and an id that no longer names anything opens nothing at all.
+     */
+    const reopenLast = async () => {
+      const notes = store.listNotes();
+      const remembered = lastNoteIn(vault.id);
+      const reopen = notes.find((note) => note.id === remembered) ?? notes[0];
+      if (reopen) {
+        await openNote(reopen.id);
+      }
+    };
+
+    /**
+     * Two stages, because the first one is usually instant and the second one is a network call.
+     * A vault this device has seen before draws from its own copy immediately; the pull that
+     * follows is a delta, and anything it brings is reconciled the same way a live edit from
+     * another device is. A vault it has not seen waits for the pull, which is metadata only.
+     */
+    void (async () => {
+      try {
+        const warm = await store.hydrate();
+        if (!live) {
+          return;
         }
-      })
-      .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : String(e)),
-      )
-      .finally(() => setLoading(false));
-  }, [store, openNote, vault.id]);
+
+        if (warm) {
+          setLoading(false);
+          refresh();
+          await reopenLast();
+        }
+
+        await store.pull();
+        if (!live) {
+          return;
+        }
+
+        refresh();
+        if (warm) {
+          await reconcileNote();
+        } else {
+          setLoading(false);
+          await reopenLast();
+        }
+      } catch (e: unknown) {
+        if (live) {
+          setError(e instanceof Error ? e.message : String(e));
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      live = false;
+    };
+  }, [store, openNote, reconcileNote, vault.id]);
 
   /** Someone else changed this vault. Pull, then reconcile with whatever is in the editor. */
   const handleRemoteChange = useCallback(async () => {
     try {
       await store.pull();
       refresh();
-
-      const noteId = selectedRef.current;
-      if (!noteId) {
-        return;
-      }
-
-      const remoteHead = store.headOf(noteId);
-      const base = baselineRef.current;
-      if (!remoteHead || remoteHead === base) {
-        return;
-      }
-
-      const remoteText = store.materialise(remoteHead);
-      const localText = textRef.current;
-      const baseText = base ? store.materialise(base) : "";
-
-      if (localText === baseText) {
-        // Nothing unsaved locally, so the remote version simply becomes what we are editing.
-        setText(remoteText);
-        setBaseline(remoteHead);
-        return;
-      }
-
-      // Both sides moved. Merge against where they diverged, and remember the branch we merged from
-      // so the version we write next records both parents.
-      const ancestorId = base ? store.commonAncestor(base, remoteHead) : null;
-      const ancestorText = ancestorId
-        ? store.materialise(ancestorId)
-        : baseText;
-      const merged = merge(ancestorText, localText, remoteText);
-
-      setText(merged.text);
-      setConflicted(merged.conflicted);
-      setPendingMergeParent(base);
-      setBaseline(remoteHead);
+      await reconcileNote();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [store]);
+  }, [store, reconcileNote]);
+
+  /**
+   * This device can reach the server again. Pull what it missed, merge it with whatever is in the
+   * editor, and send anything that could not be sent while it was gone - in that order.
+   *
+   * The order is the point. Saving first would parent the new version on a head this device only
+   * believes is current, which is a fork; pulling first is what lets the same edit become a child
+   * of what actually happened. See `resync` in `services/noteSync.ts`.
+   */
+  const handleReconnect = useCallback(async () => {
+    try {
+      applyEditor(await resync(store, selectedRef.current, editorRef.current));
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [store, applyEditor]);
 
   useEffect(() => {
-    const socket = new SyncSocket((event) => {
-      if (event.vaultId === vault.id) {
-        void handleRemoteChange();
-      }
-    });
+    const socket = new SyncSocket(
+      (event) => {
+        if (event.vaultId === vault.id) {
+          void handleRemoteChange();
+        }
+      },
+      () => void handleReconnect(),
+    );
     socket.connect();
-    return () => socket.close();
-  }, [vault.id, handleRemoteChange]);
+
+    // The socket is the better signal - it knows the server answered, not merely that the OS
+    // thinks there is a network - but it can take its backoff to notice, and `online` fires the
+    // moment a laptop lid opens. Both end in `resync`, which does nothing when there is nothing to
+    // catch up on.
+    const online = () => void handleReconnect();
+    window.addEventListener("online", online);
+
+    return () => {
+      socket.close();
+      window.removeEventListener("online", online);
+    };
+  }, [vault.id, handleRemoteChange, handleReconnect]);
 
   // Autosave. Every pause in typing that actually changed something becomes a version.
   useEffect(() => {
-    if (!selected) {
+    if (!selected || !unsaved(store, selected, editorRef.current)) {
       return;
     }
 
-    let currentText: string;
-    try {
-      currentText = store.textOf(selected);
-    } catch {
-      return;
-    }
-
-    if (text === currentText) {
-      setDirty(false);
-      return;
-    }
-
-    setDirty(true);
     const timer = window.setTimeout(() => {
-      store
-        .saveNote(selected, text, { mergeParentId: pendingMergeParent })
-        .then(() => {
-          setPendingMergeParent(null);
-          setBaseline(store.headOf(selected));
-          setDirty(false);
-          refresh();
-        })
-        .catch((e: unknown) =>
-          setError(e instanceof Error ? e.message : String(e)),
-        );
+      void (async () => {
+        // The state is read again here rather than captured: the merge that a remote change starts
+        // is asynchronous, and what should be written is whatever the editor holds at the moment
+        // the timer fires.
+        applyEditor(await commit(store, selected, editorRef.current));
+        refresh();
+      })();
     }, AUTOSAVE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [text, selected, store, pendingMergeParent]);
+    // `editor.text` rather than `editor`: a save that only changed the indicator must not restart
+    // the timer, or a note that failed to save would re-attempt on a loop of its own making.
+  }, [editor.text, selected, store, applyEditor]);
 
   /**
    * Runs a change against the store and shows anything it refuses. Moves and renames are the one
@@ -435,7 +559,7 @@ function Workspace({
         folder === "" ? leaf : `${folder}/${leaf}`,
         "",
       );
-      openNote(note.id);
+      await openNote(note.id);
     });
 
   const newFolder = (parent: string) =>
@@ -450,7 +574,7 @@ function Workspace({
       await store.deleteNote(noteId);
       if (selected === noteId) {
         setSelected(null);
-        setText("");
+        applyEditor(EMPTY_EDITOR);
       }
     });
 
@@ -460,7 +584,7 @@ function Workspace({
       await store.deleteFolder(path);
       if (selected !== null && inside.includes(selected)) {
         setSelected(null);
-        setText("");
+        applyEditor(EMPTY_EDITOR);
       }
     });
 
@@ -477,7 +601,13 @@ function Workspace({
         isNamed: true,
         label: label.trim(),
       });
-      setBaseline(store.headOf(selected));
+      applyEditor({
+        ...editorRef.current,
+        baseline: store.headOf(selected),
+        mergeParent: null,
+        status: "saved",
+        error: null,
+      });
     });
 
   const restore = async (version: NoteVersion) => {
@@ -486,8 +616,7 @@ function Workspace({
     }
     try {
       await store.restore(selected, version.id);
-      setText(store.textOf(selected));
-      setBaseline(store.headOf(selected));
+      applyEditor(opened(store, selected));
       setPreviewVersion(null);
       refresh();
     } catch (e) {
@@ -583,16 +712,24 @@ function Workspace({
           </button>
 
           <span
-            className={dirty ? "save-state saving" : "save-state"}
+            className={`save-state ${editor.status}`}
             aria-live="polite"
+            title={editor.status === "error" ? (editor.error ?? undefined) : undefined}
           >
             <span className="save-dot" aria-hidden="true" />
-            {dirty ? "Saving" : "Saved"}
+            {SAVE_LABEL[editor.status]}
           </span>
         </div>
       </header>
 
-      {error && <p className="error banner">{error}</p>}
+      {/* A refused save says its piece here as well as in the indicator, because the indicator has
+          room for two words. Being offline does not: it is temporary, the edit is safely on the
+          device, and a banner for it would be there for the whole of a train journey. */}
+      {(error ?? (editor.status === "error" ? editor.error : null)) && (
+        <p className="error banner">
+          {error ?? editor.error}
+        </p>
+      )}
       {conflicted && (
         <p className="warning banner">
           This note was edited on another device at the same time. The parts
@@ -732,6 +869,13 @@ function Workspace({
             <div className="empty">
               <h2>Loading notes...</h2>
               <p className="muted">Decrypting this vault on your device.</p>
+            </div>
+          ) : opening !== null ? (
+            /* Its history is being fetched. Instant when this device already has it, which is the
+               usual case - so this shows up on a note being read here for the first time. */
+            <div className="empty">
+              <h2>Opening {store.titleOf(opening)}...</h2>
+              <p className="muted">Fetching this note and decrypting it on your device.</p>
             </div>
           ) : previewVersion ? (
             <div className="version-view">

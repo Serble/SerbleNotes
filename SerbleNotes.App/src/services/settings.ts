@@ -27,10 +27,18 @@ export interface Settings {
    * device leaves an id here that means nothing, which costs a lookup rather than an error.
    */
   lastNote: Record<string, string>;
+
+  /**
+   * The vault that was open when the app was last used, so starting it comes back to the note you
+   * were writing rather than to a list. Null means the vault list is where the user left off -
+   * going back to it is a deliberate act, and it is the way to say "not this one next time".
+   */
+  lastVault: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   lastNote: {},
+  lastVault: null,
 };
 
 /**
@@ -52,7 +60,10 @@ function clean(stored: Partial<Settings>): Settings {
     }
   }
 
-  return { lastNote };
+  const lastVault =
+    typeof stored.lastVault === 'string' && stored.lastVault !== '' ? stored.lastVault : null;
+
+  return { lastNote, lastVault };
 }
 
 export function readSettings(): Settings {
@@ -103,8 +114,33 @@ export function rememberNote(vaultId: string, noteId: string): void {
   setSetting('lastNote', { ...lastNote, [vaultId]: noteId });
 }
 
+/**
+ * The vault to open on startup, if this device remembers one. Checked against the server before it
+ * is used: a vault deleted from another device leaves an id here that opens nothing.
+ */
+export function lastVaultOpened(): string | null {
+  return getSetting('lastVault');
+}
+
+export function rememberVault(vaultId: string): void {
+  if (getSetting('lastVault') !== vaultId) {
+    setSetting('lastVault', vaultId);
+  }
+}
+
+/** Leaving a vault for the list is the user saying that is where they want to start next time. */
+export function forgetLastVault(): void {
+  if (getSetting('lastVault') !== null) {
+    setSetting('lastVault', null);
+  }
+}
+
 /** Used when a vault is gone, so its entry does not sit here for the life of the browser. */
 export function forgetVault(vaultId: string): void {
+  if (getSetting('lastVault') === vaultId) {
+    setSetting('lastVault', null);
+  }
+
   const lastNote = getSetting('lastNote');
   if (!(vaultId in lastNote)) {
     return;

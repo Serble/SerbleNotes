@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { EntryList } from './EntryList';
 import { Modal } from './Modal';
 import { archiveFileName, buildArchive } from '../services/archive';
@@ -19,7 +19,45 @@ export function ExportDialog({ store, onClose }: { store: VaultStore; onClose: (
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { notes, unreadable } = store.exportEntries();
+  /**
+   * Opening a vault no longer downloads the notes themselves, so an archive - which is every note's
+   * text and nothing else - is where that download happens now. It runs as the dialog opens rather
+   * than when Save is pressed, so the wait is over before the user picks a file, and it reports
+   * progress because on a large vault it is not instant.
+   */
+  const [entries, setEntries] = useState<Awaited<ReturnType<VaultStore['exportEntries']>> | null>(
+    null,
+  );
+  const [ready, setReady] = useState({ done: 0, total: store.listNotes().length });
+  const [prepareError, setPrepareError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+
+    store
+      .exportEntries((done, total) => {
+        if (live) {
+          setReady({ done, total });
+        }
+      })
+      .then((result) => {
+        if (live) {
+          setEntries(result);
+        }
+      })
+      .catch((e: unknown) => {
+        if (live) {
+          setPrepareError(e instanceof Error ? e.message : String(e));
+        }
+      });
+
+    return () => {
+      live = false;
+    };
+  }, [store]);
+
+  const notes = entries?.notes ?? [];
+  const unreadable = entries?.unreadable ?? [];
   const folders = store.folders();
 
   const run = async () => {
@@ -52,7 +90,9 @@ export function ExportDialog({ store, onClose }: { store: VaultStore; onClose: (
         ) : (
           <>
             <p className="muted small">
-              {notes.length} {notes.length === 1 ? 'note' : 'notes'} in {folders.length}{' '}
+              {entries === null ? ready.total : notes.length}{' '}
+              {(entries === null ? ready.total : notes.length) === 1 ? 'note' : 'notes'} in{' '}
+              {folders.length}{' '}
               {folders.length === 1 ? 'folder' : 'folders'}, as a zip: one <code>.md</code> file per
               note, and folders as folders. It is the same shape the vault will have when it can be
               mounted as a filesystem, so anything on your machine can read it.
@@ -66,6 +106,13 @@ export function ExportDialog({ store, onClose }: { store: VaultStore; onClose: (
             </p>
 
             <EntryList title="Cannot be read, and will not be in it:" items={unreadable} />
+
+            {entries === null && prepareError === null && (
+              <p className="muted small">
+                Getting the notes ready... {ready.done} of {ready.total}.
+              </p>
+            )}
+            {prepareError !== null && <p className="error">{prepareError}</p>}
           </>
         )}
 
@@ -77,7 +124,11 @@ export function ExportDialog({ store, onClose }: { store: VaultStore; onClose: (
           {done === null ? 'Cancel' : 'Close'}
         </button>
         {done === null && (
-          <button className="primary" onClick={() => void run()} disabled={busy}>
+          <button
+            className="primary"
+            onClick={() => void run()}
+            disabled={busy || entries === null}
+          >
             {busy ? 'Preparing...' : 'Export'}
           </button>
         )}

@@ -10,5 +10,9 @@ public class ChangesResponse {
 
     public Note[] Notes { get; set; } = [];
 
-    public NoteVersion[] Versions { get; set; } = [];
+    /// <summary>
+    /// Ciphertext when the caller asked for bodies, metadata only when it did not. See
+    /// <see cref="SyncVersion"/> for why the second shape exists.
+    /// </summary>
+    public SyncVersion[] Versions { get; set; } = [];
 }

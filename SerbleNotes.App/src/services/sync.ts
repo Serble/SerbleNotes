@@ -11,7 +11,23 @@ export class SyncSocket {
   private reconnectDelay = 1000;
   private closed = false;
 
-  constructor(private readonly onEvent: (event: SyncEvent) => void) {}
+  /**
+   * `onReopen` fires every time the connection is established after having been lost - not on the
+   * first connect, which the caller has just asked for and is already handling.
+   *
+   * A device that was offline missed every event sent while it was gone: this socket carries
+   * notifications, not a replayable log, and nothing on the server remembers what a client has been
+   * told. So a reconnection is not "carry on where we left off", it is "find out what happened",
+   * and something has to go and ask. Without this a device came back from a tunnel believing its
+   * own head was the vault's, and the next thing it saved forked the note.
+   */
+  constructor(
+    private readonly onEvent: (event: SyncEvent) => void,
+    private readonly onReopen?: () => void,
+  ) {}
+
+  /** True once a connection has been lost, so the next open is a reconnection rather than the first. */
+  private reopening = false;
 
   connect(): void {
     const token = getToken();
@@ -26,6 +42,10 @@ export class SyncSocket {
 
     socket.onopen = () => {
       this.reconnectDelay = 1000;
+      if (this.reopening) {
+        this.reopening = false;
+        this.onReopen?.();
+      }
     };
 
     socket.onmessage = (message) => {
@@ -46,6 +66,7 @@ export class SyncSocket {
       if (this.closed) {
         return;
       }
+      this.reopening = true;
       // Back off so a backend restart doesn't get hammered by every client at once.
       window.setTimeout(() => this.connect(), this.reconnectDelay);
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);

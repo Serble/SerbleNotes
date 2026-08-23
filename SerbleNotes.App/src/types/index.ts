@@ -34,7 +34,13 @@ export interface NoteVersion {
   mergeParentId: string | null;
   isSnapshot: boolean;
   isNamed: boolean;
-  payload: string;
+  /**
+   * Ciphertext, or null when only this version's metadata has been downloaded. Opening a vault asks
+   * for metadata alone - see VaultStore.ensureNote - so a version arrives without its body and
+   * gains one when the note is read. Anything that turns bytes back into text must treat null as
+   * "not here yet" and never as empty.
+   */
+  payload: string | null;
   label: string | null;
   deviceId: string | null;
   size: number;

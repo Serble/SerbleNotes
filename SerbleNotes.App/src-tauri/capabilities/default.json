@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the app's own webview is allowed to ask the shell to do. Nothing here reaches outside the app except handing the sign-in URL to the system browser.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "deep-link:default",
@@ -24,8 +26,15 @@
     },
     {
       "identifier": "opener:allow-open-url",
-      "description": "Hand the Serble sign-in page to the system browser, and nothing else. The permission on its own only enables the command; the URL must also fall inside a scope, and with no scope granted every URL is refused - which is what stopped sign-in working the first time. Signing in through the real browser rather than a webview we control is the point, so the app never sees the Serble password. Widen this only if something else genuinely needs opening; links inside notes are not clickable today.",
-      "allow": [{ "url": "https://serble.net/oauth/*" }]
+      "description": "Hand a URL to the system browser: the Serble sign-in page, and links inside notes. The permission on its own only enables the command; the URL must also fall inside a scope, and with no scope granted every URL is refused - which is what stopped sign-in working the first time. Signing in through the real browser rather than a webview we control is the point, so the app never sees the Serble password. The two patterns below are http and https and nothing else: a note is a document from anywhere, and a scope of '*' would let one hand the shell a file: path or a custom scheme belonging to another app. components/linkClicks.ts refuses anything but http and https before it ever gets here.",
+      "allow": [
+        {
+          "url": "https://*"
+        },
+        {
+          "url": "http://*"
+        }
+      ]
     }
   ]
 }

@@ -7,6 +7,7 @@ import {
   ColumnIcon,
   CopyIcon,
   CutIcon,
+  LinkIcon,
   MoveDownIcon,
   MoveLeftIcon,
   MoveRightIcon,
@@ -19,6 +20,7 @@ import {
 } from './Icons';
 import { copyText, readText } from '../services/clipboard';
 import { columnCount } from './tableFormat';
+import { destinationAt, openLink } from './linkClicks';
 import { isTextMode, setTextMode } from './tableState';
 import {
   activeTable,
@@ -49,7 +51,11 @@ import {
  * not let this app read is a fact about the browser, and saying so is more use than a menu item
  * that appears to work and does not.
  */
-export function editorMenu(view: EditorView, notify: (message: string) => void): MenuEntry[] {
+export function editorMenu(
+  view: EditorView,
+  notify: (message: string) => void,
+  pointedLink?: string | null,
+): MenuEntry[] {
   const range = view.state.selection.main;
   const context = activeTable(view);
 
@@ -111,6 +117,18 @@ export function editorMenu(view: EditorView, notify: (message: string) => void):
     },
     { label: 'Paste', icon: <PasteIcon />, run: () => void paste() },
   ];
+
+  // A link under the caret. Ctrl-click opens one on a keyboard; this is how a finger does, and it
+  // is also where the address becomes visible - the editor hides it, being a link's machinery.
+  const link = pointedLink ?? destinationAt(view, range.head);
+  if (link !== null) {
+    editing.unshift({
+      label: 'Open link',
+      icon: <LinkIcon />,
+      hint: link,
+      run: () => void openLink(link),
+    });
+  }
 
   if (!context) {
     return [

@@ -254,11 +254,20 @@ Every value lives as a custom property at the top of `index.css`, and the CodeMi
 - **Two blues, on purpose.** `--accent` is for text and marks on a dark ground; `--accent-fill` is
   darker so that white text on a filled button actually reaches contrast. One blue fails at one end
   or the other.
-- **Three screens, one structure.** The vault list (`VaultsPage`) is rows, not cards - name, whether
-  it is encrypted, when it last changed. The workspace (`VaultPage`) is an app bar, the file-manager
+- **Three screens, one structure.** The vault list (`VaultsPage`) is rows, not cards - name, which
+  of the three states it is in, when it last changed. The workspace (`VaultPage`) is an app bar, the file-manager
   sidebar, the editor, and a rail of panels on the right. Both sit inside `.shell` / `.workspace`,
   which are full-height flex columns; nothing but the editor surface, the sidebar and the rail
   scrolls.
+- **A vault row says whether opening it will ask for anything.** Three states, three marks: an
+  encrypted vault whose key is already on this device (open padlock, quiet - the ordinary case,
+  and colouring most of the list would say nothing), one that still needs its password (closed
+  padlock, `--accent`, because it is the only one that wants something), and an unencrypted vault
+  (open padlock, `--warning`). The list asks `cachedKey` per vault after it loads, so the state
+  arrives a moment behind the names; until it does an encrypted vault is drawn as locked, which is
+  the reading that promises the least. The row's line of text names the state and stops there - the
+  full "the server can read this" is said where the choice is made, in the create dialog, and a
+  yellow mark on a row nobody is deciding anything on had become wallpaper.
 - **Panels are a component, not a layout.** `components/Panel.tsx` is the shell every side panel
   shares - a title, one action, a close button - and `PanelRow` is a label/value line. `NoteDetails`
   and `HistoryPanel` are both built from it, and both close from the panel itself as well as from
@@ -307,6 +316,15 @@ Every value lives as a custom property at the top of `index.css`, and the CodeMi
   `(pointer: coarse)`; text inputs are never below 16px, or iOS zooms the page on focus and does not
   zoom back out. Anything that only appeared on hover - the delete icon on a tree row - is simply
   there on a narrow screen, because there is no hover to reveal it.
+- **A note opens to be read, not to be typed into.** `MarkdownEditor` focuses itself on mount only
+  where the pointer is fine. On a desktop that means you can type the moment a note opens; on a
+  phone it summoned the keyboard over half the note every time one was opened. A tap in the text is
+  how you say you want to write, and it is the same tap that would otherwise have dismissed the
+  keyboard.
+- **On touch, a table keeps the width the "add column" strip was taking.** That strip is 37px of a
+  383px pane - a tenth of the screen, spent narrowing the thing being read. It is hidden under
+  `(pointer: coarse)` and a column is added from the long-press menu, like every other structural
+  edit to a table. The row bar along the bottom stays: height is not the scarce direction.
 - **Width and input device are different questions.** `.wide-only` / `.narrow-only` key off width.
   What the *pointer* can do is asked with `(pointer: coarse)` directly, where it matters: `--control`
   grows, the copy button on a code block gets bigger, and the delete icon on a tree row stops waiting
@@ -349,12 +367,140 @@ to know before changing it:
   by line rather than taken from the syntax tree, because a line with nothing on it is not a node.
 - **Mount the editor with `key={noteId}`.** That rebuilds it per note, which resets the undo history.
   Without it, undo in one note reaches back into another note's text.
+- **A note may be written in HTML, and it is rendered.** Not a handful of tags mapped onto
+  markdown's own styles - tags, attributes, `style` on any of them, `<style>` blocks and `<font>`.
+  See "HTML and CSS" below, which is where all of it is decided.
+- **A table cell renders its markdown, because a cell is a widget and not a run of text.** There are
+  no character offsets inside one for `livePreview` to decorate, so `components/inlineMarkdown.ts`
+  turns the cell's markdown into inert markup instead: marked's *inline* parser (a cell cannot
+  introduce a heading or a list), then the same sanitiser everything else in a note goes through.
+  What that refuses is shown as the text it is - `drawsFaithfully` in `noteHtml.ts` is the rule, and
+  it is the rule for HTML blocks too. A cell swaps to its markdown on `pointerdown` - before the
+  caret is placed, so it lands in what will be edited - and back when it is left. A cell with no
+  markup in it is never rewritten at all.
+- **Markup is only revealed while the editor has focus.** A cursor in an editor nobody is typing in
+  is where you *were*, and it defaults to position 0 - so an unfocused note used to show its first
+  line's syntax for no visible reason. Plain on a phone, where opening a note no longer focuses it.
+- **What markdown a note may use**, measured against markdownguide.org. Everything in the basic
+  syntax works: both kinds of heading (`#` and the `===` / `---` underline, which applies to the
+  whole paragraph above it), emphasis, blockquotes **nested to any depth** (drawn as one bar per
+  level - a line is walked past once per quote it is inside, and the depth reaches the stylesheet as
+  `--quote-depth`), lists, code, horizontal rules in all three spellings, links, images, escapes and
+  HTML. From the extended syntax: tables, fenced code with a language, strikethrough, task lists
+  with boxes that can actually be ticked, autolinks, `x^2^`, `H~2~O`, and `==highlight==` - the last
+  written here as a delimiter extension in the same shape as the parser's own Strikethrough.
+  **Not supported, deliberately:** footnotes, definition lists, heading IDs and `:emoji:`
+  shortcodes. The first three need block parsers and mean nothing without anchors or a footnote
+  section to link to; the fourth needs a shortcode table of thousands of entries, and a note can
+  hold the character itself. A footnote reference is left exactly as written rather than half-drawn:
+  `[^1]` parses as a link, and hiding its brackets turned `here[^1]` into `here^1`.
+- **An empty checkbox is a checkbox.** GFM defines a task list item as `[ ]` *followed by a space*,
+  so `- [ ]` on its own is a list item whose text is "[ ]" and `- [x]` is a list item containing a
+  link - which is exactly what somebody typing one gets, because the empty box is the first thing
+  anyone writes and the trailing space that would have fixed it is invisible. `markdownLanguage.ts`
+  therefore uses its own `Tasks` extension in place of GFM's `TaskList`, identical but for accepting
+  the end of the line as well as a space, and `GFM` is taken apart into `Table`, `Strikethrough` and
+  `Autolink` so the other three still apply. `- [x]text` with no space at all is still not a task, as
+  upstream has it. `lists.ts` matches the same shape, so Enter on an empty task item ends the list
+  rather than adding another. marked has the identical rule and is not ours to configure, so
+  `MarkdownPreview` completes such a line with a space before parsing (skipping fenced blocks) -
+  the same relaxation, expressed as text because that renderer is somebody else's.
+- **The tick in a ticked box is a drawn path, masked in.** `--tick` in `index.css` is the one copy
+  of it - a stroked, round-ended checkmark on the same 24 grid every icon in `Icons.tsx` uses, though
+  heavier at 4 rather than 2.2 because it renders into about 10px, where the app's usual weight is a
+  hairline. It is a *mask* rather than a background because the box is already painted `--accent` and
+  a mask applies to everything an element draws, so the tick has to be its own layer; that is also
+  what keeps its colour a token instead of a colour written into the picture. It was two rotated
+  gradient bars before, which is a way of drawing a tick that only works at one size - at 14px the
+  bars met in the wrong place and it read as a lopsided X.
+- **A task's box is drawn, never an `<input>`.** In the editor that is `TaskWidget`; in the rendered
+  preview marked's own checkbox renderer is replaced so it emits the same span, styled by `.md-task`
+  in `index.css` to match. A form control is exactly what a note may not put on this page - the
+  sanitiser refuses `<input>`, so the default would silently leave a task list looking like an
+  ordinary one, which is how it was found. The preview's box is not tickable: it shows what a note
+  said at a point in the past, and ticking a box in a version would either do nothing or edit
+  history.
+- **An image that would have to be fetched is shown as its alt text.** Asking a host for a picture
+  tells it when the note was opened, and the app's own content policy refuses the request anyway -
+  so it reads as the reference it is. That is true of `![alt](url)` and of `<img src>` alike; an
+  image carrying its own bytes (`data:`) is drawn, because it is already in the note.
 - **The markdown language is assembled by hand** in `components/markdownLanguage.ts` from
   `@lezer/markdown`, rather than using `@codemirror/lang-markdown`. That package statically depends
   on `lang-html`, which pulls in the whole JavaScript and CSS parsers so it can highlight HTML
   embedded in a note; tree-shaking cannot reach it, and it was about two thirds of the bundle. If you
   swap the parser back, check that every node name `livePreview` keys off still exists, or rendering
   silently stops working.
+
+### HTML and CSS
+
+A note may be written in HTML as well as markdown, and the HTML is rendered. `<table>` is a table,
+`<div style="color: orange">` is orange, `<font color="red" size="5">` is what it says it is, and a
+`<style>` block styles the note. No JavaScript, ever - see below for what that costs and why the
+line is where it is.
+
+`components/noteHtml.ts` decides all of it, once. Three places draw a note - the editor's live
+preview, a table cell, and the rendered preview in the history panel - and all three come through
+that file, so a note cannot look like two different documents depending on where it is read.
+
+- **Nothing a note says ever runs.** No script, no event handler, no `iframe`, no form control, no
+  remote fetch. That is not a style rule, it is the boundary: a note arrives from somewhere -
+  imported from an archive, synced from another device, written by somebody else - and this app
+  decrypts it on the user's own origin, holding their vault key. Markup from a note is inert, and
+  anything on the page that acts was put there by this app. `ALLOWED_TAGS` and `ALLOWED_ATTR` are
+  exhaustive lists rather than a set of rules with exceptions, so `onclick` is not refused by
+  something that could be got round - it is simply not a name that appears in them.
+- **What is not understood is shown as written, never swallowed.** `drawsFaithfully` asks two
+  questions before any markup is drawn: is every element one this app renders, and did sanitising
+  keep all of the text? `<script>alert(1)</script>` fails both, and a `<td>` with no table round it
+  fails the second - the HTML parser drops it and takes the words with it. Either way the note shows
+  its source. An editor that silently swallowed a tag would be lying about what the note says.
+- **Deliberately not built yet:** `<svg>`, `<audio>` and `<video>`. Not refused on principle - just
+  not done, and a tag that is not understood shows as text rather than disappearing.
+- **Inline HTML becomes a real element.** `livePreview` pairs tags like brackets and puts a mark
+  decoration with the tag's own `tagName` and attributes round the text between them, so the browser
+  renders `<font color="red">` exactly as it would anywhere else. A tag that never closes stays the
+  text it is. Both halves follow the usual rule: the styling always applies, and the tags themselves
+  hide while the cursor is off their line.
+- **A block of HTML is a widget**, from a state field (`components/htmlView.ts`), for the same
+  reason a table is: replacing four lines with one element changes the block structure of the
+  document, and a view plugin only sees the viewport. The source comes back when the cursor is in it.
+- **Markdown inside HTML works, and that is why `htmlView` is more than "render the block".** A blank
+  line ends an HTML block, so `<div class="warn">`, a blank line, some markdown, a blank line and
+  `</div>` is three separate things to CommonMark - which is why that pattern is written everywhere
+  and works almost nowhere. A block that is **nothing but tags** is therefore treated as a boundary:
+  an unclosed opening tag waits for the block that closes it, the two are then hidden, and what the
+  tag was setting - its `style`, its `class`, its `align` - is put on every line between them as a
+  line decoration. CodeMirror combines `class` and `style` across line decorations, so nested
+  wrappers nest. A tag that is never closed is left as text, exactly as an unclosed inline tag is.
+  What this does *not* give a wrapper is the element's own default box: a `<blockquote>` used this
+  way indents nothing by itself. It carries the styling that was asked for.
+- **A note's CSS is collected, scoped, and applied to the whole note.** Every `<style>` block in the
+  note becomes one stylesheet outside the document (`NoteStyles`), which is what lets a rule at the
+  bottom reach a paragraph at the top and what keeps the CSS live while it is being written - a
+  stylesheet that only applied when the cursor was elsewhere would be impossible to edit. The block
+  itself collapses to a small "CSS" chip that puts the caret back in the source when clicked.
+- **Scoping is the part that can be quietly wrong**, so it is `components/cssScope.ts` and it has
+  tests. A selector that comes out unprefixed still works - and what it styles is the app. Rules are
+  read with the browser's own parser, not with a regular expression, and every selector is prefixed
+  with `[data-note-css="..."]`; `html`, `body` and `:root` are taken to mean the note itself, because
+  that is what somebody writing them means. The editor and the history panel get a scope each, so
+  two notes on screen do not reach each other.
+- **The sheet is parsed as a constructed `CSSStyleSheet`**, which is the one kind that cannot be in
+  force anywhere - it applies only to a document that has adopted it, and this one is adopted by
+  nothing. `replaceSync` also drops `@import` by specification, which is a second answer to the
+  question `IMPORT_RULE` asks: a note is not allowed to tell a third party when it was read. The
+  fallback for an engine without it is a style element in a document with no browsing context.
+- **Two things are taken back off a note wherever it is drawn.** `position: fixed` becomes
+  `absolute`, because it is measured against the window rather than against anything in the note and
+  is the one declaration that can put a note's markup over the app - over the vault list, over a
+  password box. A note is a region of a page, not the page. And `target` is removed from every
+  anchor: links are opened by `bindLinks`, which hands them to the system browser through `openLink`,
+  because a real anchor would navigate the app away and a webview has no back button.
+- **The honest limitation.** In the editor, markdown is decorated text rather than elements, so a
+  note's CSS reaches the HTML the note itself wrote and not the markdown around it: `h1 { color: red }`
+  colours nothing there, because there is no `h1`. In the rendered preview, where marked does produce
+  elements, the same rule does colour headings. Fixing that would mean giving markdown's own output
+  real tag names in the editor, which is a change to how the live preview works rather than to this.
 
 ### Code blocks
 
@@ -796,10 +942,56 @@ autosave writes it over the real note. Two consequences to respect:
 | `GET/POST /api/vaults`, `GET/DELETE /api/vaults/{id}` | Vault CRUD. |
 | `PUT /api/vaults/{id}/password` | New wrapped key, salt and KDF params after a password change. |
 | `GET/POST /api/vaults/{id}/notes` | List and create notes. |
-| `GET /api/vaults/{id}/changes?since=N` | The whole sync read path. |
+| `GET /api/vaults/{id}/changes?since=N&bodies=false` | The sync read path. `bodies=false` leaves the ciphertext out - see "Opening a vault". |
 | `GET/POST /api/notes/{id}/versions`, `DELETE /api/notes/{id}` | Version DAG append and note tombstone. |
 | `PUT /api/notes/{id}/name` | Rename or move. Metadata only - appends no version. |
 | `GET /api/sync` | WebSocket. Notifications only, token via `?access_token=`. |
+
+**Opening a vault does not download it.** `/changes` sends version metadata only unless asked for
+`bodies=true`, and the client fetches a note's ciphertext from `GET /notes/{id}/versions` when the
+note is opened. This is not a small saving: the vault it was measured on is 196 notes and 6.5 MB, of
+which **92% is five large notes**, and none of it is needed to draw a tree built from note names.
+Metadata for that vault is 160 KB and answers in about 100 ms, against 1.6 s for the whole thing.
+Three rules keep it safe:
+
+- **A missing body is never an empty one.** `bodyOf` in `store.ts` throws rather than returning `''`,
+  because text is what the next autosave diffs against - a note that opened blank would be saved
+  blank. Everything that reads text calls `VaultStore.ensureNote` first, and `saveNote` and
+  `restore` call it themselves so no caller can forget.
+- **The device cache holds ciphertext, never plaintext** (`services/vaultCache.ts`, IndexedDB). It is
+  the same bytes the server holds, so keeping them is no weaker than the sync that fetched them; a
+  cache of decrypted notes would undo the point of the product.
+- **Only `pull` moves the cursor.** A version this device just wrote carries a cursor, but that says
+  nothing about whether other devices' writes below it have been seen. Storing it would make the
+  next delta skip them permanently. In memory that only cost a re-pull; on disk it would be
+  unrecoverable.
+
+`services/stores.ts` keeps one `VaultStore` per vault for the session, keyed by vault id **and** key -
+a store built under one key must never serve a session that unlocked with another. Cold open of that
+vault went from 2.8 s to 1.3 s, a warm one from the device cache to 0.35 s, and leaving a vault and
+coming back to 0.25 s. Export is the one operation that still needs every note, so `ExportDialog`
+fetches them all (six at a time) with progress before it will build an archive.
+
+`services/settings.ts` is the client's own configuration - one JSON object under one key, currently
+holding which note was last open in each vault and which vault was open when the app was last used.
+New per-device preferences belong there rather than in a key of their own; `layout.ts` and the folder
+state in `store.ts` predate it.
+
+**The app starts where it was left.** `App` reads `lastVaultOpened()` once at mount and fetches that
+one vault (`GET /vaults/{id}`, not the list - the list is not needed to draw a vault, and this is the
+first screen), so a restart lands in the vault and then, through `lastNoteIn`, on the note. Three
+things about it are decisions rather than details:
+
+- **Going back to the vault list forgets it.** That is the only way a user can say "not this one
+  next time", and it costs them one press. Anything else - closing the app mid-note, a crash - means
+  they were in the vault, so that is where they come back to.
+- **A vault that cannot be fetched is not forgotten.** Deleted, offline, a token the server no
+  longer likes: all of them fall back to the vault list, which says its own piece about why, and the
+  id stays for the next attempt. Only `forgetVault` clears it, on the one occasion it is known to
+  mean nothing.
+- **Restoring into a locked vault is the unlock screen, not an error.** The remembered vault is a
+  vault, not a key: a device that has not cached this vault's key asks for the password exactly as
+  it would have done from the list.
 
 **Sync cursor.** Every vault carries a monotonic `Cursor`; each write reserves the next value via
 `IVaultRepo.NextCursor` (an `UPDATE ... SET Cursor = Cursor + 1` and read inside one transaction, so
@@ -894,7 +1086,7 @@ and other people on it - but they should still be set high enough that nobody or
 and they must fail with a clear reason rather than a silent truncation.
 
 Where this lives today: `services/passwordStrength.ts` and `components/PasswordStrength.tsx`, and the
-unencrypted-vault notice in `VaultsPage.tsx`, which states plainly that the server can read it.
+unencrypted-vault notice in `CreateVaultDialog`, which states plainly that the server can read it.
 
 ## Testing the core
 
@@ -930,9 +1122,15 @@ Two rules that matter more than coverage numbers:
 ### The client's own tests
 
 `SerbleNotes.App/tests/` holds the few pieces of the client that can be wrong rather than broken -
-today, the markdown table layout, which rewrites the user's text and whose bugs save a table with a
-cell missing rather than failing. Everything else in the client is a button that either works or
-visibly does not.
+today the markdown table layout, which rewrites the user's text and whose bugs save a table with a
+cell missing rather than failing, and the CSS scoping in `cssScope.ts`, whose bug is a note styling
+the app with nothing on the screen to say so. Everything else in the client is a button that either
+works or visibly does not.
+
+The DOM half of drawing a note - the sanitiser, the CSS parse, the decorations `htmlView` builds -
+has no tests here, because a DOM is what it needs and jsdom is not a dependency. It was driven under
+one during the work and the results checked by hand; if that becomes a regular need, adding jsdom as
+a dev dependency is the change to make, and it is the reason `cssScope.ts` has no imports of its own.
 
 ```fish
 cd SerbleNotes.App; npm test

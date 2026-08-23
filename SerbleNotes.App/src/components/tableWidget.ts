@@ -10,6 +10,8 @@ import {
   renderTable,
   unescapeCell,
 } from './tableFormat';
+import { hasMarkup, renderInline } from './inlineMarkdown';
+import { openLink, rememberPointedLink } from './linkClicks';
 import { appendColumn, appendRow, moveRow, setCell } from './tables';
 
 /**
@@ -219,9 +221,17 @@ export class TableWidget extends WidgetType {
       const text = unescapeCell(cellOf(this.table, row, column) ?? '');
 
       // Never the cell being typed in: replacing its text would put the caret at the end of it on
-      // every keystroke, and this runs on the very change that cell just made.
-      if (cell !== document.activeElement && cell.textContent !== text) {
-        cell.textContent = text;
+      // every keystroke, and this runs on the very change that cell just made. The comparison is
+      // against the markdown the cell was drawn from, because what is on screen is what it renders
+      // to - and those are different strings whenever the cell holds any markup at all.
+      // Two reasons to redraw: the markdown changed, or the cell is showing markdown it is not
+      // being edited in. The second is the invariant this rests on - a cell nobody is typing in
+      // shows what its markdown draws - and checking it here means a cell can never be left
+      // stranded in source by something that swapped it and then lost focus another way.
+      const stranded =
+        cell.dataset.rendered !== 'true' && hasMarkup(text) && cell.textContent === text;
+      if (cell !== document.activeElement && (cell.dataset.source !== text || stranded)) {
+        showRendered(cell, text);
       }
 
       // Only when it actually differs. This runs on every keystroke, and writing a class that is
@@ -279,6 +289,7 @@ export class TableWidget extends WidgetType {
     return table;
   }
 
+
   private buildCell(view: EditorView, row: number, column: number, header: boolean): HTMLElement {
     const holder = document.createElement(header ? 'th' : 'td');
 
@@ -289,7 +300,7 @@ export class TableWidget extends WidgetType {
     cell.contentEditable = 'plaintext-only';
     cell.dataset.row = String(row);
     cell.dataset.column = String(column);
-    cell.textContent = unescapeCell(cellOf(this.table, row, column) ?? '');
+    showRendered(cell, unescapeCell(cellOf(this.table, row, column) ?? ''));
 
     let timer = 0;
     const commit = () => {
@@ -301,8 +312,62 @@ export class TableWidget extends WidgetType {
       window.clearTimeout(timer);
       timer = window.setTimeout(commit, COMMIT_MS);
     });
-    cell.addEventListener('blur', commit);
+
+    // Before the caret is placed, so it is placed in the markdown rather than in what was drawn
+    // from it. Focus covers the ways in that are not a pointer - Tab, and the caret being sent here
+    // after a row or column was added.
+    cell.addEventListener('pointerdown', (event) => {
+      // Before the swap: focusing this cell replaces what is drawn with the markdown it came from,
+      // and a link that was under the pointer stops existing. The menu asks for it afterwards.
+      rememberPointedLink(event.target);
+
+      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (anchor && (event.ctrlKey || event.metaKey)) {
+        // Pressing with the modifier down means open, not edit - so the cell is left as it is
+        // rather than swapped for its markdown, and the click that would have followed never
+        // arrives to find the link gone.
+        event.preventDefault();
+        void openLink(anchor.getAttribute('href') ?? '');
+
+        // Some browsers focus the cell anyway, and a focused cell shows its markdown. Hand the
+        // focus back rather than trying to stop it: leaving a cell focused while it displays what
+        // its markdown *draws* would mean the next keystroke committing that drawing as the text -
+        // "Example" replacing "[Example](https://example.com)". Then put the cell back the way it
+        // was: opening a link is not an edit, and nothing about the cell should have changed.
+        window.setTimeout(() => {
+          cell.blur();
+          showRendered(cell, cell.dataset.source ?? cell.textContent ?? '');
+        }, 0);
+        return;
+      }
+
+      showSource(cell);
+    });
+
+    // A link in a cell. The rules are the editor's own: a plain click is for editing, Ctrl or Cmd
+    // opens - and on a touchscreen the long-press menu does, since there is no modifier to hold.
+    // The click is always stopped, whatever it was: an anchor left to itself would navigate the
+    // webview away from the app, which on Android is a window with no way back to the note.
+    cell.addEventListener('click', (event) => {
+      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!anchor) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        void openLink(anchor.getAttribute('href') ?? '');
+      }
+    });
+
+    cell.addEventListener('blur', () => {
+      // The source is what is in the cell right now; the commit is what puts it in the document.
+      const source = cell.textContent ?? '';
+      commit();
+      showRendered(cell, source);
+    });
     const claim = () => {
+      showSource(cell);
       view.dispatch({ effects: setActiveCell.of({ from: tableFrom(cell), row, column }) });
     };
     // Focus is the usual way, but a right-click does not focus a cell in every browser and the menu
@@ -366,6 +431,73 @@ export class TableWidget extends WidgetType {
       event.preventDefault();
       commit();
       this.go(view, cell, row === HEADER_ROW ? 0 : row + 1, column);
+      return;
+    }
+
+    // The arrows move between cells only from the edge of what is in one, so they still walk through
+    // a cell's own text first. "Once you are at the end of it" is the rule for all four: right and
+    // down from the end, left and up from the start - which is also how you get to the end or the
+    // start in the first place.
+    if (event.key.startsWith('Arrow')) {
+      const at = caretOffset(cell);
+      if (at === null) {
+        return;
+      }
+
+      // Left and right hand over only from the ends, so they still walk through the cell's own text.
+      const atStart = at === 0;
+      const atEnd = at === (cell.textContent ?? '').length;
+
+      if (event.key === 'ArrowRight' && atEnd) {
+        event.preventDefault();
+        commit();
+        if (column < last) {
+          this.go(view, cell, row, column + 1);
+        } else if (row === HEADER_ROW || row < this.table.rows.length - 1) {
+          // Wraps to the start of the next row, but never off the end of the table: Tab is what
+          // adds a row, and an arrow that grew it would do so on the way past.
+          this.go(view, cell, row === HEADER_ROW ? 0 : row + 1, 0);
+        }
+        return;
+      }
+
+      if (event.key === 'ArrowLeft' && atStart) {
+        event.preventDefault();
+        commit();
+        if (column > 0) {
+          this.go(view, cell, row, column - 1);
+        } else if (row > 0) {
+          this.go(view, cell, row - 1, last);
+        } else if (row === 0) {
+          this.go(view, cell, HEADER_ROW, last);
+        }
+        return;
+      }
+
+      // Up and down always move a row, without waiting for the caret to reach an end. A cell holds
+      // one line - Enter goes to the cell below rather than breaking the line - so there is no line
+      // above or below to move to inside one, and leaving it to the browser meant an arrow
+      // sometimes wandered into whichever cell happened to be next in the DOM.
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        commit();
+        // Never past the last row: Enter is what adds one, and an arrow that grew the table would
+        // do it by accident on the way past.
+        if (row === HEADER_ROW || row < this.table.rows.length - 1) {
+          this.go(view, cell, row === HEADER_ROW ? 0 : row + 1, column);
+        }
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (row !== HEADER_ROW) {
+          commit();
+          this.go(view, cell, row === 0 ? HEADER_ROW : row - 1, column);
+        }
+        return;
+      }
+
       return;
     }
 
@@ -531,4 +663,71 @@ function focusCell(cell: HTMLElement): void {
   range.collapse(false);
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+/**
+ * A cell as it reads: its markdown rendered, and `<br>` an actual line break.
+ *
+ * A table is a widget rather than a run of text, so the live preview has no character offsets to
+ * decorate inside one - this is the equivalent for cells, and it follows the same rule as every
+ * other line in the editor: what you are not editing is shown as it reads, and what you are
+ * editing is shown as it is written. `showSource` is the other half.
+ *
+ * The source is kept on the element because the rendered text is not something the source can be
+ * recovered from - "code" says nothing about the backticks it came from.
+ */
+function showRendered(cell: HTMLElement, source: string): void {
+  cell.dataset.source = source;
+
+  if (!hasMarkup(source)) {
+    // The common case, and worth keeping separate: a cell with no markup in it is never rewritten,
+    // so clicking into one leaves the caret exactly where it was put.
+    if (cell.textContent !== source) {
+      cell.textContent = source;
+    }
+    delete cell.dataset.rendered;
+    return;
+  }
+
+  cell.innerHTML = renderInline(source);
+  cell.dataset.rendered = 'true';
+}
+
+/**
+ * Puts the markdown back, so what is typed into is what the document holds.
+ *
+ * Called on pointerdown as well as focus, which is what makes the caret land where it was aimed:
+ * the swap happens before the browser places it, so it is placed in the text that will be edited
+ * rather than in rendered output that is about to be replaced.
+ */
+function showSource(cell: HTMLElement): void {
+  if (cell.dataset.rendered !== 'true') {
+    return;
+  }
+
+  cell.textContent = cell.dataset.source ?? cell.textContent ?? '';
+  delete cell.dataset.rendered;
+}
+
+/**
+ * Where the caret is in a cell, counted in characters, or null if it is not in this one.
+ *
+ * A cell is being edited as its markdown when this is asked - `showSource` swapped it back before
+ * the caret was placed - so the offsets are offsets into what the document holds.
+ */
+function caretOffset(cell: HTMLElement): number | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+    return null;
+  }
+
+  const range = selection.getRangeAt(0);
+  if (!cell.contains(range.startContainer)) {
+    return null;
+  }
+
+  const upTo = range.cloneRange();
+  upTo.selectNodeContents(cell);
+  upTo.setEnd(range.startContainer, range.startOffset);
+  return upTo.toString().length;
 }

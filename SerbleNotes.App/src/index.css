@@ -34,6 +34,11 @@
   --accent-fill-hover: #3d7cf5;
   --on-accent: #ffffff;
 
+  /* A tick, drawn on the 24 grid every icon uses and carried as a mask so its colour stays a token
+     rather than being written into the picture. Heavier than the app's usual 2.2 stroke because it
+     renders into about 10px, where that weight would be a hairline. */
+  --tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5L19.5 6.5'/%3E%3C/svg%3E");
+
   /* The one selection colour. The browser paints it for text; the editor paints it itself on an
      empty line, which has no text to paint it on - see .cm-md-blank-selected in MarkdownEditor.tsx.
      Both read this, so a selection cannot end up two different colours. */
@@ -391,6 +396,15 @@ p.small, span.small, .small { font-size: 0.82rem; }
   animation: breathe 1.4s ease-in-out infinite;
 }
 
+/* Offline is a state, not a failure: the edit is on the device and goes up when the connection
+   does. It gets the warning colour and a still dot - nothing is in flight to breathe about. */
+.save-state.offline { color: var(--warning); }
+.save-state.offline .save-dot { background: var(--warning); }
+
+/* The server refused it. Nothing is retrying, so this is the one that is actually bad. */
+.save-state.error { color: var(--danger); }
+.save-state.error .save-dot { background: var(--danger); }
+
 @keyframes breathe {
   50% { opacity: 0.2; }
 }
@@ -464,8 +478,16 @@ p.small, span.small, .small { font-size: 0.82rem; }
   background: var(--surface-2);
   color: var(--text-2);
 }
-/* Not a decoration: this is the one glance that says whether the server can read the vault. */
-.vault-mark.open {
+/* Not decoration: the mark is the one glance that says which of the three a vault is. `ready` is
+   the quiet default - an encrypted vault this device can already open is the ordinary case, and
+   colouring most of the list would say nothing. `locked` is tinted because it is the one that will
+   ask something of the user, and `plain` keeps the warning colour: the server can read it. */
+.vault-mark.locked {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.vault-mark.plain {
   color: var(--warning);
   border-color: color-mix(in srgb, var(--warning) 35%, transparent);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
@@ -1441,7 +1463,13 @@ body.resizing * { cursor: inherit; }
 @media (pointer: coarse) {
   .cm-table { --grip: 2.1rem; }
   .cm-td { padding: 0.55rem 0.7rem; }
-  .cm-plus-col { width: 34px; }
+
+  /* The strip that adds a column costs 37px of a 383px pane - a tenth of a phone screen, spent on
+     something reached for far less often than reading the table it is narrowing. On touch it goes,
+     and a column is added from the long-press menu ("Column left" / "Column right") like every
+     other structural edit. The row bar stays: it is along the bottom, where it costs height that
+     is not scarce, and it is the one whose edge a finger can actually aim at. */
+  .cm-plus-col { display: none; }
   .cm-plus-row { height: 34px; }
   .cm-table-mode { height: 34px; font-size: 0.78rem; }
   .cm-row-grip { opacity: 1; height: 34px; }
@@ -1515,6 +1543,39 @@ body.resizing * { cursor: inherit; }
 .markdown th[align='right'],
 .markdown td[align='right'] { text-align: right; }
 .markdown img { max-width: 100%; }
+
+/*
+ * A task list's box in a rendered version. The twin of `.cm-md-task` in MarkdownEditor.tsx - same
+ * size, same weight, same tick drawn from two gradients - because a note read in the history panel
+ * should be the document it was in the editor. The marker is dropped for the same reason it is
+ * there: the box says which kind of item this is, and a bullet as well says it twice.
+ */
+.markdown li:has(> .md-task) { list-style: none; margin-left: -1.1em; }
+.markdown .md-task {
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.12em;
+  margin-right: 0.15em;
+  border: 2px solid var(--muted);
+  border-radius: 3px;
+}
+.markdown .md-task-done {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The tick, masked in so its colour is still a token. Twin of `.cm-md-task-done::after` in
+   MarkdownEditor.tsx - same path, same weight, same 24 grid every icon is drawn on. */
+.markdown .md-task-done::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--on-accent);
+  -webkit-mask: var(--tick) center / contain no-repeat;
+  mask: var(--tick) center / contain no-repeat;
+}
 .markdown a { color: var(--accent); }
 
 /* ---------------------------------------------------------------- password strength */

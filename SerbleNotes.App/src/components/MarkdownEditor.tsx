@@ -9,6 +9,9 @@ import { codeWidths } from './codeWidths';
 import { ContextMenu, type MenuState } from './ContextMenu';
 import { copyCode } from './copyCode';
 import { editorMenu } from './editorMenu';
+import { htmlView } from './htmlView';
+import { linkClicks, linkPointer, pointedLink } from './linkClicks';
+import { listKeys } from './lists';
 import { livePreview } from './livePreview';
 import { tableControls } from './tableControls';
 import { tableView } from './tableView';
@@ -112,6 +115,10 @@ const theme = EditorView.theme({
   '.cm-md-strike': { textDecoration: 'line-through', color: 'var(--muted)' },
   '.cm-md-link': { color: 'var(--accent)', textDecoration: 'underline' },
 
+  // While Ctrl or Cmd is held, a link is a thing you can open - see LinkPointer in linkClicks.ts.
+  // `&` because the class lands on the editor's own element rather than on something inside it.
+  '&.cm-modifier-held .cm-md-link, &.cm-modifier-held .cm-td a': { cursor: 'pointer' },
+
   '.cm-md-code': {
     fontFamily: MONO,
     fontSize: '0.9em',
@@ -120,9 +127,159 @@ const theme = EditorView.theme({
     padding: '0.1em 0.3em',
   },
 
+  // A rule is an empty line with a line drawn across the middle of it. Painted rather than a
+  // border, so it sits in the middle of the line's height rather than at its edge.
+  '.cm-md-hr': {
+    backgroundImage: 'linear-gradient(var(--border-2), var(--border-2))',
+    backgroundSize: '100% 2px',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
+  },
+
+  // A list item's dot, and the number of an ordered one. The dot is drawn so it looks the same on
+  // every device; the number is the item's own text and is only quietened. The line's indent is set
+  // per line by livePreview, because it is where that item's text starts.
+  '.cm-md-bullet': {
+    display: 'inline-block',
+    width: '0.36em',
+    height: '0.36em',
+    borderRadius: '50%',
+    background: 'var(--muted)',
+    verticalAlign: 'middle',
+    // Sits where the marker was, in the middle of the space the indent left for it.
+    margin: '0 0 0.12em 0.12em',
+  },
+  '.cm-md-list-number': { color: 'var(--muted)' },
+
+  // A task's box. Drawn on the same 2px weight as the icons, and big enough to hit with a finger
+  // without pushing the line apart - it sits in the space the marker's own indent left for it.
+  '.cm-md-task': {
+    display: 'inline-block',
+    width: '0.95em',
+    height: '0.95em',
+    verticalAlign: '-0.12em',
+    borderRadius: '3px',
+    border: '2px solid var(--muted)',
+    cursor: 'pointer',
+  },
+  '.cm-md-task-done': { borderColor: 'var(--accent)', background: 'var(--accent)' },
+
+  // The tick itself: one drawn path, the same stroked and round-ended shape every icon in Icons.tsx
+  // is, carried in as a mask so its colour is still a token rather than being written into the
+  // picture. `--tick` is in index.css, drawn once and used here and by the rendered preview.
+  //
+  // It was two rotated gradient bars before, which is a way of drawing a tick that only works at one
+  // size: at the 14px this actually renders at, the two bars met in the wrong place and it read as a
+  // lopsided X.
+  //
+  // A mask rather than a background because the box is already painted `--accent`, and a mask
+  // applies to everything the element draws - the tick has to be its own layer to sit on top.
+  '.cm-md-task-done::after': {
+    content: '""',
+    display: 'block',
+    width: '100%',
+    height: '100%',
+    background: 'var(--on-accent)',
+    '-webkit-mask': 'var(--tick) center / contain no-repeat',
+    mask: 'var(--tick) center / contain no-repeat',
+  },
+
+  // An image is shown as its alt text - the picture is not fetched. See livePreview.ts.
+  '.cm-md-image': { color: 'var(--text-2)', fontStyle: 'italic' },
+
+  // Markdown's own emphasis, which is decorated text rather than an element.
+  '.cm-md-underline': { textDecoration: 'underline' },
+  '.cm-md-mark': {
+    background: 'color-mix(in srgb, var(--warning) 30%, transparent)',
+    borderRadius: '3px',
+    padding: '0.05em 0.15em',
+  },
+  '.cm-md-small': { fontSize: '0.85em', color: 'var(--muted)' },
+  '.cm-md-sub': { verticalAlign: 'sub', fontSize: '0.75em' },
+  '.cm-md-sup': { verticalAlign: 'super', fontSize: '0.75em' },
+
+  // HTML a note writes is a real element wherever it appears - wrapped round a run of text by
+  // livePreview, rendered whole by a block widget, or inside a table cell. So it is styled by tag
+  // name rather than by class, once, for all three. Only the tags whose own default this app
+  // disagrees with are here: `<b>`, `<u>` and the rest already look like what they are.
+  //
+  // A note's own CSS is applied after this and wins, which is the way round it should be.
+  '.cm-content code, .cm-content kbd, .cm-content samp': {
+    fontFamily: MONO,
+    fontSize: '0.9em',
+    background: 'var(--surface-2)',
+    borderRadius: '4px',
+    padding: '0.1em 0.3em',
+  },
+  '.cm-content mark': {
+    background: 'color-mix(in srgb, var(--warning) 30%, transparent)',
+    color: 'inherit',
+    borderRadius: '3px',
+    padding: '0.05em 0.15em',
+  },
+  '.cm-content small': { color: 'var(--muted)' },
+  '.cm-content a': { color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' },
+
+  // A block of HTML, drawn as what it says. Padding rather than margin: the editor measures a block
+  // widget with getBoundingClientRect, which does not include margins, so a margin here is space on
+  // the screen the editor does not know about and every line below it is mispositioned by that much.
+  '.cm-note-html': {
+    padding: '0.2rem 0',
+    maxWidth: '100%',
+    overflowX: 'auto',
+  },
+  '.cm-note-html-inline': { padding: 0, display: 'inline' },
+  '.cm-note-html table': { borderCollapse: 'collapse' },
+  '.cm-note-html th, .cm-note-html td': {
+    border: '1px solid var(--border)',
+    padding: '0.25rem 0.6rem',
+  },
+  '.cm-note-html img': { maxWidth: '100%' },
+  '.cm-note-html hr': { border: 0, borderTop: '1px solid var(--border)' },
+
+  // The note's stylesheet, collapsed to a chip. See NoteCssWidget in htmlWidget.ts.
+  '.cm-note-css': {
+    display: 'inline-block',
+    font: `500 0.7rem/1.4 ${MONO}`,
+    letterSpacing: '0.06em',
+    color: 'var(--muted)',
+    background: 'var(--surface-2)',
+    border: '1px solid var(--border)',
+    borderRadius: '5px',
+    padding: '0.05rem 0.4rem',
+    margin: '0.15rem 0',
+    cursor: 'pointer',
+  },
+
+  // A table cell renders its markdown to real markup (see inlineMarkdown.ts), so these are elements
+  // rather than decorated ranges - the same look, reached by a different name.
+  '.cm-td code': {
+    fontFamily: MONO,
+    fontSize: '0.9em',
+    background: 'var(--surface-2)',
+    borderRadius: '4px',
+    padding: '0.1em 0.3em',
+  },
+  '.cm-td a': { color: 'var(--accent)', textDecoration: 'underline' },
+  '.cm-td mark': {
+    background: 'color-mix(in srgb, var(--warning) 30%, transparent)',
+    color: 'inherit',
+    borderRadius: '3px',
+    padding: '0.05em 0.15em',
+  },
+  '.cm-td small': { color: 'var(--muted)' },
+  '.cm-td del, .cm-td s': { color: 'var(--muted)' },
+
+  // One bar per level of quoting, drawn rather than bordered: a border gives one line one edge, and
+  // a quote inside a quote needs as many as it is deep. The gradient paints a bar every step across
+  // the width the padding reserves, so any depth works and depth 1 looks as it always did.
   '.cm-md-quote': {
-    borderLeft: '3px solid var(--border)',
-    paddingLeft: '0.8rem',
+    '--quote-step': '0.9rem',
+    paddingLeft: 'calc(var(--quote-depth, 1) * var(--quote-step))',
+    backgroundImage:
+      'repeating-linear-gradient(to right, var(--border) 0 3px, transparent 3px var(--quote-step))',
+    backgroundSize: 'calc(var(--quote-depth, 1) * var(--quote-step)) 100%',
+    backgroundRepeat: 'no-repeat',
     color: 'var(--muted)',
   },
 
@@ -328,7 +485,23 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
       }
     }
 
-    setMenu({ x, y, items: editorMenu(editor, (message) => latestOnNotice.current?.(message)) });
+    // A link inside a drawn table is markup in a widget, not text at a document position, so the
+    // menu cannot find it the way it finds one in a paragraph. What was pointed at is the answer.
+    // Still in the page when the menu opens from a keyboard or a mouse over a paragraph; gone when
+    // pressing on a cell swapped it for the markdown behind it, which is why the press remembers it.
+    const anchor =
+      target instanceof Element ? target.closest<HTMLAnchorElement>('.cm-td a[href]') : null;
+    const link = anchor?.getAttribute('href') ?? pointedLink();
+
+    setMenu({
+      x,
+      y,
+      items: editorMenu(
+        editor,
+        (message) => latestOnNotice.current?.(message),
+        link,
+      ),
+    });
   };
 
   /**
@@ -376,6 +549,7 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
       doc: value,
       extensions: [
         history(),
+        listKeys,
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdownLanguage,
         syntaxHighlighting(codeHighlighting),
@@ -383,6 +557,9 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
         codeWidths,
         livePreview,
         copyCode,
+        linkClicks,
+        linkPointer,
+        htmlView,
         tables,
         tableView,
         tableControls,
@@ -397,7 +574,14 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
 
     const editor = new EditorView({ state, parent: host.current! });
     view.current = editor;
-    editor.focus();
+
+    // Only where focusing costs nothing. On a desktop it means you can type the moment a note
+    // opens; on a phone it summons the on-screen keyboard over half the note, and most of the time
+    // a note is opened to be read. A tap in the text is how you say you want to write, and it is
+    // one tap - the same one you would have spent dismissing the keyboard.
+    if (!window.matchMedia('(pointer: coarse)').matches) {
+      editor.focus();
+    }
 
     return () => {
       cancelPress();

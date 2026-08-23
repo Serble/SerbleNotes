@@ -17,7 +17,14 @@ import { api } from '../services/api';
 import { logout } from '../services/auth';
 import { day, relative } from '../services/dates';
 import { forgetVault } from '../services/settings';
-import { changePassword, forgetKey, newVaultMaterial, rememberKey } from '../services/vaultKeys';
+import { forgetAllStores, forgetStore } from '../services/stores';
+import {
+  cachedKey,
+  changePassword,
+  forgetKey,
+  newVaultMaterial,
+  rememberKey,
+} from '../services/vaultKeys';
 import type { Vault } from '../types';
 
 interface VaultsPageProps {
@@ -33,11 +40,22 @@ export function VaultsPage({ onOpenVault }: VaultsPageProps) {
   const [repasswording, setRepasswording] = useState<Vault | null>(null);
   const [changed, setChanged] = useState<string | null>(null);
 
+  // Which encrypted vaults this device already holds the key for. A keychain is asked
+  // asynchronously and can refuse to answer at all, so this arrives after the list does; until it
+  // lands an encrypted vault is drawn as locked, which is the state that promises the least.
+  const [unlocked, setUnlocked] = useState<ReadonlySet<string>>(new Set());
+
   const load = () => {
     setLoading(true);
     api
       .listVaults()
-      .then(setVaults)
+      .then(async (list) => {
+        setVaults(list);
+        const keys = await Promise.all(
+          list.map((vault) => (vault.encrypted ? cachedKey(vault.id) : null)),
+        );
+        setUnlocked(new Set(list.filter((_, i) => keys[i] !== null).map((vault) => vault.id)));
+      })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   };
@@ -49,6 +67,8 @@ export function VaultsPage({ onOpenVault }: VaultsPageProps) {
       await api.deleteVault(vault.id);
       await forgetKey(vault.id);
       forgetVault(vault.id);
+      // The vault is gone, so this device's copy of its ciphertext goes with it.
+      await forgetStore(vault.id);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -66,7 +86,14 @@ export function VaultsPage({ onOpenVault }: VaultsPageProps) {
           <LogoIcon size={18} />
           Serble Notes
         </span>
-        <button className="ghost" onClick={logout}>
+        <button
+          className="ghost"
+          onClick={() => {
+            // Nothing decrypted outlives the session. What is cached on the device is ciphertext.
+            forgetAllStores();
+            logout();
+          }}
+        >
           <SignOutIcon />
           <span className="wide-only">Sign out</span>
         </button>
@@ -105,57 +132,68 @@ export function VaultsPage({ onOpenVault }: VaultsPageProps) {
           </div>
         ) : (
           <ul className="vault-list">
-            {ordered.map((vault) => (
-              <li key={vault.id} className="vault-row">
-                <button className="vault-open" onClick={() => onOpenVault(vault)}>
-                  <span className={vault.encrypted ? 'vault-mark' : 'vault-mark open'}>
-                    {vault.encrypted ? <LockIcon size={17} /> : <UnlockedIcon size={17} />}
-                  </span>
+            {ordered.map((vault) => {
+              // Three states, and the one that matters before a tap is whether opening this vault
+              // will ask for a password. The mark is the glance and the line under the name is the
+              // sentence; an unencrypted vault keeps the warning colour it has always had.
+              const state = !vault.encrypted
+                ? 'plain'
+                : unlocked.has(vault.id)
+                  ? 'ready'
+                  : 'locked';
 
-                  <span className="vault-text">
-                    <span className="vault-name">{vault.name}</span>
-                    <span className="vault-meta">
-                      {vault.encrypted ? (
-                        <span>Encrypted</span>
-                      ) : (
-                        // Say it on the row itself. An unencrypted vault is readable by the server,
-                        // and nothing in this list should let someone forget which kind they opened.
-                        <span className="warning">Not encrypted - the server can read this</span>
-                      )}
-                      <span className="sep" aria-hidden="true" />
-                      <span title={`Created ${day(vault.createdAt)}`}>
-                        Updated {relative(vault.updatedAt)}
+              return (
+                <li key={vault.id} className="vault-row">
+                  <button className="vault-open" onClick={() => onOpenVault(vault)}>
+                    <span className={`vault-mark ${state}`}>
+                      {state === 'locked' ? <LockIcon size={17} /> : <UnlockedIcon size={17} />}
+                    </span>
+
+                    <span className="vault-text">
+                      <span className="vault-name">{vault.name}</span>
+                      <span className="vault-meta">
+                        {state === 'plain' ? (
+                          <span className="warning">Not encrypted</span>
+                        ) : state === 'ready' ? (
+                          <span>Encrypted - unlocked on this device</span>
+                        ) : (
+                          <span>Encrypted - password needed</span>
+                        )}
+                        <span className="sep" aria-hidden="true" />
+                        <span title={`Created ${day(vault.createdAt)}`}>
+                          Updated {relative(vault.updatedAt)}
+                        </span>
                       </span>
                     </span>
-                  </span>
 
-                  <ChevronRightIcon size={15} />
-                </button>
-
-                {vault.encrypted && (
-                  <button
-                    className="icon"
-                    title={`Change the password for ${vault.name}`}
-                    aria-label={`Change the password for ${vault.name}`}
-                    onClick={() => {
-                      setChanged(null);
-                      setRepasswording(vault);
-                    }}
-                  >
-                    <KeyIcon />
+                    <ChevronRightIcon size={15} />
                   </button>
-                )}
 
-                <button
-                  className="icon danger"
-                  title={`Delete ${vault.name}`}
-                  aria-label={`Delete ${vault.name}`}
-                  onClick={() => setDeleting(vault)}
-                >
-                  <TrashIcon />
-                </button>
-              </li>
-            ))}
+                  {vault.encrypted && (
+                    <button
+                      className="icon"
+                      title={`Change the password for ${vault.name}`}
+                      aria-label={`Change the password for ${vault.name}`}
+                      onClick={() => {
+                        setChanged(null);
+                        setRepasswording(vault);
+                      }}
+                    >
+                      <KeyIcon />
+                    </button>
+                  )}
+
+                  <button
+                    className="icon danger"
+                    title={`Delete ${vault.name}`}
+                    aria-label={`Delete ${vault.name}`}
+                    onClick={() => setDeleting(vault)}
+                  >
+                    <TrashIcon />
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </main>
@@ -193,6 +231,9 @@ export function VaultsPage({ onOpenVault }: VaultsPageProps) {
             // The row now holds a wrapped key and salt that nothing here can open with the old
             // password. Keeping the stale one would send the next unlock at a blob that is gone.
             setVaults((current) => current.map((v) => (v.id === vault.id ? vault : v)));
+            // Changing the password unwrapped the key here, so this device now holds it whether or
+            // not it did a moment ago.
+            setUnlocked((current) => new Set(current).add(vault.id));
           }}
         />
       )}

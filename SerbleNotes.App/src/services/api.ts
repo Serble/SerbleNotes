@@ -67,17 +67,50 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * How long to wait for the server before deciding it is not there.
+ *
+ * A connection that has gone away does not refuse requests, it swallows them: the phone keeps the
+ * socket open, the TCP retries run their course, and `fetch` sits there for minutes without either
+ * succeeding or failing. That is what "stuck on Saving" was - not a bug in what the client did with
+ * a failure, but a failure that never arrived. Nothing above this can tell the difference between a
+ * slow server and an absent one, so the difference has to be decided here.
+ *
+ * Generous on purpose. Everything the client sends is a small JSON body - a diff, a sealed name -
+ * so twenty seconds is far beyond a slow-but-working connection, and the cost of being wrong is
+ * small now: the edit is kept as a draft and sent again when the connection comes back.
+ */
+const TIMEOUT_MS = 20000;
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
-  const response = await fetch(apiUrl(path), {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Device-Id': deviceId(),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  });
+
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(path), {
+      ...init,
+      // `init.signal` wins if a caller brought its own, so this can never take one away.
+      signal: init.signal ?? AbortSignal.timeout(TIMEOUT_MS),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Device-Id': deviceId(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init.headers,
+      },
+    });
+  } catch {
+    // `fetch` rejects with "Failed to fetch" for everything from no network to DNS to a refused
+    // connection, and that sentence tells the user nothing they can act on. Status 0 because there
+    // is no response: nothing reached the server, so nothing it says can be reported.
+    //
+    // A timeout lands here too, and deliberately reads the same way: from the caller's point of
+    // view a server that never answered and a server that could not be reached are one situation,
+    // and both are retried when the connection comes back.
+    throw new ApiError(
+      'Could not reach the server. This device may be offline, or the server may be down.',
+      0,
+    );
+  }
 
   if (!response.ok) {
     if (response.status === 401 && token) {
@@ -117,6 +150,12 @@ export const api = {
 
   listVaults: () => request<Vault[]>('/vaults'),
 
+  /**
+   * One vault. Used to reopen the vault this device was last in without waiting for the whole list,
+   * and it is what checks that the remembered vault is still there.
+   */
+  getVault: (id: string) => request<Vault>(`/vaults/${id}`),
+
   createVault: (body: {
     name: string;
     encrypted: boolean;
@@ -132,8 +171,16 @@ export const api = {
 
   deleteVault: (id: string) => request<void>(`/vaults/${id}`, { method: 'DELETE' }),
 
-  changes: (vaultId: string, since: number) =>
-    request<ChangesResponse>(`/vaults/${vaultId}/changes?since=${since}`),
+  /**
+   * The sync read path. `bodies` is false for everything that opens or refreshes a vault: the tree
+   * is drawn from note names, so the payloads - which are almost all of the bytes - are fetched per
+   * note by `noteVersions` when one is actually read.
+   */
+  changes: (vaultId: string, since: number, bodies = false) =>
+    request<ChangesResponse>(`/vaults/${vaultId}/changes?since=${since}&bodies=${bodies}`),
+
+  /** Every version of one note, ciphertext included. */
+  noteVersions: (noteId: string) => request<NoteVersion[]>(`/notes/${noteId}/versions`),
 
   createNote: (
     vaultId: string,

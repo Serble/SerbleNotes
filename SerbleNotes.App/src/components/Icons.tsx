@@ -252,6 +252,14 @@ export const CheckIcon = ({ size = 16 }: IconProps) => (
  * drawing anybody reads as "cut" - a simplification would be a mark that has to be learned - and the
  * rings are drawn a shade larger than they want to be so they do not fill in solid at 2.2.
  */
+/* Two links of a chain, meeting in the middle. Two strokes, which is all the weight will carry. */
+export const LinkIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M10 14a4.5 4.5 0 0 0 6.4 0l2.6-2.6a4.5 4.5 0 0 0-6.4-6.4L11.2 6.4" />
+    <path d="M14 10a4.5 4.5 0 0 0-6.4 0L5 12.6a4.5 4.5 0 0 0 6.4 6.4l1.4-1.4" />
+  </svg>
+);
+
 export const CutIcon = ({ size = 16 }: IconProps) => (
   <svg {...base(size)} aria-hidden="true">
     <circle cx="6.5" cy="6.5" r="2.8" />

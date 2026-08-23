@@ -1,5 +1,5 @@
 import { syntaxTree } from '@codemirror/language';
-import { MapMode, type EditorState, type Extension } from '@codemirror/state';
+import { EditorState, MapMode, type Extension } from '@codemirror/state';
 import { EditorView, ViewPlugin, keymap, type PluginValue, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import {
@@ -23,7 +23,13 @@ import {
   withoutColumn,
   withoutRow,
 } from './tableFormat';
-import { activeCellOf, focusCellAfterRender, isTextMode, tableState } from './tableState';
+import {
+  activeCellOf,
+  focusCellAfterRender,
+  isTextMode,
+  setActiveCell,
+  tableState,
+} from './tableState';
 
 /**
  * Tables in the editor: knowing which one the cursor is in, changing its shape, and keeping its
@@ -632,9 +638,146 @@ const formatOnLeave = ViewPlugin.fromClass(FormatOnLeave, {
   },
 });
 
+/**
+ * Forgets which cell was last pointed at, the moment something else is pointed at.
+ *
+ * `activeCell` is how a table says which one a command is about, because a right-click does not
+ * focus a cell in every browser. Left to itself it is sticky: after touching a table once, a
+ * right-click anywhere in the note - a paragraph, another table, empty space - still found that
+ * cell, and the menu offered "Delete row" for a table nobody was pointing at.
+ */
+const forgetCellElsewhere = EditorView.domEventHandlers({
+  pointerdown(event, view) {
+    const target = event.target;
+    const inTable = target instanceof Element && target.closest('.cm-table') !== null;
+
+    if (!inTable && activeCellOf(view.state) !== null) {
+      view.dispatch({ effects: setActiveCell.of(null) });
+    }
+
+    // Never handled here: this only watches, and everything else still happens.
+    return false;
+  },
+});
+
+/**
+ * Keeps the blank line under a table blank.
+ *
+ * A GFM table runs on until a blank line, so that blank line is the only thing separating it from
+ * whatever comes next. Type a single character on it and the table swallows it *and* every
+ * non-blank line after it: a note with two paragraphs under a table loses both into the table on
+ * the first keystroke. That is markdown behaving correctly and is never what the person typing
+ * meant - they aimed at the gap under a table, which is where you write the next paragraph.
+ *
+ * So text typed or pasted onto that line is pushed one line down, and the blank line stays. What is
+ * inserted is the same text either way; only where it lands changes.
+ */
+const keepTableClosed = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || (!tr.isUserEvent('input') && !tr.isUserEvent('paste'))) {
+    return tr;
+  }
+
+  const state = tr.startState;
+  let push: { at: number; text: string } | undefined;
+  let changes = 0;
+
+  tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    changes += 1;
+    if (changes > 1 || fromA !== toA || inserted.length === 0) {
+      return;
+    }
+
+    const line = state.doc.lineAt(fromA);
+    if (line.length !== 0 || line.number === 1) {
+      return;
+    }
+
+    // The line above has to be the end of a table, and non-blank - two blank lines in a row means
+    // the table was already closed by the first one.
+    const above = state.doc.line(line.number - 1);
+    if (above.length === 0 || !inTable(syntaxTree(state).resolveInner(above.to, -1))) {
+      return;
+    }
+
+    push = { at: fromA, text: inserted.toString() };
+  });
+
+  const pushed: { at: number; text: string } | undefined = push;
+  if (!pushed || changes !== 1) {
+    return tr;
+  }
+
+  const { at, text } = pushed;
+  return {
+    changes: { from: at, insert: `\n${text}` },
+    selection: { anchor: at + 1 + text.length },
+    scrollIntoView: true,
+    userEvent: tr.isUserEvent('paste') ? 'input.paste' : 'input.type',
+  };
+});
+
+/**
+ * Somewhere to write when a table is the last thing in the note.
+ *
+ * A GFM table runs on until a blank line, so the line after its last row *is* another row. When the
+ * table ends the note there is no line after it at all, and clicking the empty space below the
+ * editor puts the caret at the end of the last row - where typing quietly grows the table instead
+ * of starting a paragraph under it.
+ *
+ * So a click below everything makes the line it needs. The document is only changed because
+ * somebody pointed at the empty space and meant "I want to write here": nothing is inserted when a
+ * note is merely opened, which would otherwise put a version in the history of every note that
+ * happens to end with a table.
+ */
+const roomBelowTable = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    const { doc } = view.state;
+    const end = doc.length;
+
+    // Below the last line, rather than in it. `coordsAtPos` is null when the end is not drawn,
+    // which is a scrolled-away document and not a click under the last line.
+    const bottom = view.coordsAtPos(end)?.bottom;
+    if (bottom === undefined || event.clientY <= bottom) {
+      return false;
+    }
+
+    const last = doc.lineAt(end);
+    if (last.length === 0) {
+      // There is already a blank line to land on.
+      return false;
+    }
+
+    const node = syntaxTree(view.state).resolveInner(end, -1);
+    if (!inTable(node)) {
+      return false;
+    }
+
+    view.dispatch({
+      changes: { from: end, insert: '\n\n' },
+      selection: { anchor: end + 2 },
+      userEvent: 'input',
+      scrollIntoView: true,
+    });
+    return true;
+  },
+});
+
+/** Whether a position is inside a table, at any depth. */
+function inTable(node: SyntaxNode | null): boolean {
+  for (let current = node; current; current = current.parent) {
+    if (current.name === 'Table') {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const tables: Extension = [
   tableState,
   formatOnLeave,
+  forgetCellElsewhere,
+  roomBelowTable,
+  keepTableClosed,
   keymap.of([
     // Only when there is a table to move around in. Returning false the rest of the time leaves Tab
     // doing what it does everywhere else on the page, which is how somebody using the keyboard gets

@@ -156,14 +156,17 @@ public class VaultsController(
     /// ciphertext it decrypts locally.
     /// </summary>
     [HttpGet("{id}/changes")]
-    public async Task<ActionResult<ChangesResponse>> GetChanges(string id, [FromQuery] long since = 0) {
+    public async Task<ActionResult<ChangesResponse>> GetChanges(
+        string id,
+        [FromQuery] long since = 0,
+        [FromQuery] bool bodies = true) {
         Vault? vault = await access.GetOwnedVault(User, id);
         if (vault == null) {
             return NotFound(new { message = "Vault not found." });
         }
 
         Note[] changedNotes = await notes.GetChangedNotes(vault.Id, since);
-        NoteVersion[] changedVersions = await versions.GetChangedVersions(vault.Id, since);
+        SyncVersion[] changedVersions = await versions.GetChangedVersions(vault.Id, since, bodies);
 
         // Read the cursor from the rows actually returned, not from the vault: another write can land
         // between the two queries, and reporting the vault's newer cursor would skip that change.
@@ -171,7 +174,7 @@ public class VaultsController(
         foreach (Note note in changedNotes) {
             highest = Math.Max(highest, note.Cursor);
         }
-        foreach (NoteVersion version in changedVersions) {
+        foreach (SyncVersion version in changedVersions) {
             highest = Math.Max(highest, version.Cursor);
         }
 

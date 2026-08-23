@@ -12,6 +12,7 @@ import {
 import type { Note, NoteVersion, Vault } from '../types';
 import { api, type NewVersion } from './api';
 import { randomId } from './ids';
+import { readVault, writeChanges } from './vaultCache';
 
 /** A node in the folder tree the sidebar draws. Folders are derived from names, never stored. */
 export interface TreeNode {
@@ -27,7 +28,33 @@ export interface TreeNode {
 /** How many diffs to allow before writing a full snapshot, so replaying history stays cheap. */
 const SNAPSHOT_EVERY = 10;
 
+/** How many note bodies to fetch at once when something genuinely needs all of them. */
+const ENSURE_CONCURRENCY = 6;
+
 const EMPTY_FOLDER_KEY = 'serblenotes.emptyFolders.';
+
+/**
+ * Where an edit the server has not accepted is kept, so closing the app does not destroy it.
+ *
+ * Saving is otherwise write-through - only a version the server acknowledged reaches `vaultCache` -
+ * which meant an edit made on a train lived in React state and nowhere else. That is the one place
+ * this app could lose something with no copy anywhere, so it is the one place worth a device-local
+ * store of its own.
+ *
+ * **What is written is sealed with the vault key, exactly like everything else.** A draft is note
+ * content; the rule that the device cache holds ciphertext and never plaintext does not stop
+ * applying because the note has not been saved yet.
+ *
+ * localStorage rather than IndexedDB: a draft is one small value per open note that has to be
+ * readable synchronously while the editor is being set up, which is what the empty-folder list next
+ * to it needs too. The cost is the quota - a draft of a very large note can fail to write, and does
+ * so silently, leaving the app exactly where it was before any of this existed.
+ */
+const DRAFT_KEY = 'serblenotes.draft.';
+
+function draftKey(vaultId: string, noteId: string): string {
+  return `${DRAFT_KEY}${vaultId}.${noteId}`;
+}
 
 /**
  * Folders are read out of note names, so a folder with nothing in it has nothing to be read out of.
@@ -56,6 +83,21 @@ function saveEmptyFolders(vaultId: string, folders: Set<string>): void {
 }
 
 /**
+ * The ciphertext of a version, or a refusal.
+ *
+ * A version whose body has not been downloaded is not an empty one, and the difference matters more
+ * here than anywhere else in the client: text is what the next autosave diffs against, so treating
+ * "not here yet" as "" would write a diff that deletes the note and store it as the truth. Callers
+ * reach this only by skipping `ensureNote`, which is a bug - so it throws rather than guessing.
+ */
+function bodyOf(version: NoteVersion): string {
+  if (version.payload == null) {
+    throw new Error('This note is still downloading. Give it a moment and try again.');
+  }
+  return version.payload;
+}
+
+/**
  * The client-side model of one vault: its notes, their version DAG, and the decryption that turns
  * the server's opaque blobs into text. This is local-first - every read below is answered from
  * memory, and the network only ever adds to it.
@@ -67,22 +109,225 @@ export class VaultStore {
   private emptyFolders: Set<string>;
   cursor = 0;
 
-  constructor(readonly vault: Vault, private readonly key: string) {
+  /**
+   * Decrypted paths, kept against the sealed name they came from so a rename invalidates its own
+   * entry. `tree()` asks for every note's path and the workspace re-renders on every keystroke, so
+   * without this the vault's names are decrypted a few hundred times a second while someone types.
+   */
+  private paths = new Map<string, { sealed: string | null; path: string }>();
+
+  /** Bumped by anything that changes what the tree would draw, so the tree can be reused. */
+  private revision = 0;
+  private treeCache: { revision: number; nodes: TreeNode[] } | null = null;
+
+  /** Version ids by note, so "does this note have its bodies" is not a scan of the whole vault. */
+  private versionsByNote = new Map<string, Set<string>>();
+
+  /** In-flight body fetches, so two things opening the same note make one request. */
+  private bodyRequests = new Map<string, Promise<void>>();
+
+  /** Told when something arrives in the background, so the UI can redraw. Set by the workspace. */
+  onChanged: (() => void) | null = null;
+
+  constructor(public vault: Vault, private readonly key: string) {
     this.emptyFolders = loadEmptyFolders(vault.id);
   }
 
-  /** Pulls everything that changed since our cursor. Also the initial load, with a cursor of 0. */
-  async pull(): Promise<void> {
-    const changes = await api.changes(this.vault.id, this.cursor);
-
-    for (const version of changes.versions) {
-      this.versions.set(version.id, version);
+  /**
+   * Loads what this device already had, and says whether there was anything.
+   *
+   * The cache holds ciphertext and a cursor written in the same transaction, so it is either a
+   * consistent point in the vault's history or absent. Absent costs a pull from zero, which is what
+   * every open used to do. A warm store draws immediately and the pull that follows is a delta.
+   */
+  async hydrate(): Promise<boolean> {
+    if (this.notes.size > 0) {
+      // Already open in this session - its memory is newer than anything on disk.
+      return true;
     }
-    for (const note of changes.notes) {
+
+    const cached = await readVault(this.vault.id);
+    if (!cached || cached.notes.length === 0) {
+      return false;
+    }
+
+    for (const note of cached.notes) {
       this.notes.set(note.id, note);
     }
+    for (const version of cached.versions) {
+      this.mergeVersion(version);
+    }
+    this.cursor = cached.cursor;
+    this.bump();
 
+    return true;
+  }
+
+  /**
+   * Pulls everything that changed since our cursor, metadata only.
+   *
+   * Payloads are the overwhelming majority of a vault's bytes and none of them are needed to draw
+   * the tree, so they are left on the server until a note is read - see `ensureNote`. On the vault
+   * this was measured against that is 160 KB instead of 6.5 MB, and about 100 ms instead of 1.6 s.
+   */
+  async pull(): Promise<void> {
+    const changes = await api.changes(this.vault.id, this.cursor, false);
+
+    for (const version of changes.versions) {
+      this.mergeVersion(version);
+    }
+    for (const note of changes.notes) {
+      this.putNote(note);
+    }
+
+    const moved = changes.cursor > this.cursor;
     this.cursor = Math.max(this.cursor, changes.cursor);
+
+    if (changes.notes.length === 0 && changes.versions.length === 0 && !moved) {
+      return;
+    }
+
+    // The cursor goes in with the rows it accounts for, never on its own.
+    await writeChanges(this.vault.id, {
+      notes: changes.notes,
+      versions: changes.versions.map((version) => this.versions.get(version.id) ?? version),
+      cursor: this.cursor,
+    });
+
+    // A note written before names existed is titled from its first line, which needs its body. They
+    // are rare and legacy, so they are fetched in the background rather than held against the open.
+    void this.loadUnnamedTitles();
+  }
+
+  /**
+   * Stores a version without ever losing ciphertext we already hold.
+   *
+   * A metadata pull describes versions with `payload: null`. If one of those overwrote a version
+   * whose body had already been fetched, the note would silently become unreadable until it was
+   * downloaded again - so the payload we have always wins over the absence of one.
+   */
+  private mergeVersion(version: NoteVersion): void {
+    let byNote = this.versionsByNote.get(version.noteId);
+    if (!byNote) {
+      byNote = new Set<string>();
+      this.versionsByNote.set(version.noteId, byNote);
+    }
+    byNote.add(version.id);
+
+    const existing = this.versions.get(version.id);
+    if (existing?.payload != null && version.payload == null) {
+      this.versions.set(version.id, { ...version, payload: existing.payload });
+      return;
+    }
+
+    this.versions.set(version.id, version);
+  }
+
+  private putNote(note: Note): void {
+    this.notes.set(note.id, note);
+    this.bump();
+  }
+
+  /** Invalidates everything derived from the notes: the tree, and any path read from a stale name. */
+  private bump(): void {
+    this.revision += 1;
+  }
+
+  /**
+   * Makes sure every byte of a note's history is on this device.
+   *
+   * Everything that turns a version into text goes through here first. `materialise` refuses to
+   * work from a version it does not hold rather than inventing one, so the guarantee this method
+   * provides is what keeps that refusal from ever being seen: an editor that opened an empty
+   * document over a note that exists would be overwritten by the next autosave.
+   */
+  async ensureNote(noteId: string): Promise<void> {
+    if (this.hasBodies(noteId)) {
+      return;
+    }
+
+    const existing = this.bodyRequests.get(noteId);
+    if (existing) {
+      return existing;
+    }
+
+    const request = (async () => {
+      const versions = await api.noteVersions(noteId);
+      for (const version of versions) {
+        this.mergeVersion(version);
+      }
+
+      // No cursor: these rows are already accounted for by the metadata pull that named them, and
+      // moving the cursor for a body fetch would claim to have seen changes this device has not.
+      await writeChanges(this.vault.id, { versions });
+    })();
+
+    this.bodyRequests.set(noteId, request);
+
+    try {
+      await request;
+    } finally {
+      this.bodyRequests.delete(noteId);
+    }
+  }
+
+  /** Whether this device holds the ciphertext for all of a note's known versions. */
+  hasBodies(noteId: string): boolean {
+    for (const versionId of this.versionsByNote.get(noteId) ?? []) {
+      if (this.versions.get(versionId)?.payload == null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Every note's body, for the one operation that genuinely needs all of them: writing an archive.
+   * Reports progress because on a large vault this is the download that opening one no longer is.
+   */
+  async ensureAll(onProgress?: (done: number, total: number) => void): Promise<void> {
+    const notes = this.listNotes();
+    let started = 0;
+    let done = 0;
+
+    // A few at a time rather than one after another: these are hundreds of independent requests and
+    // doing them in single file spends the whole time waiting for round trips. Bounded because the
+    // point is to use the connection, not to open two hundred sockets at once.
+    const worker = async () => {
+      for (;;) {
+        const index = started;
+        started += 1;
+        if (index >= notes.length) {
+          return;
+        }
+
+        await this.ensureNote(notes[index].id);
+        done += 1;
+        onProgress?.(done, notes.length);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(ENSURE_CONCURRENCY, notes.length) }, () => worker()),
+    );
+  }
+
+  private async loadUnnamedTitles(): Promise<void> {
+    const unnamed = this.listNotes().filter((note) => !note.name && !this.hasBodies(note.id));
+    if (unnamed.length === 0) {
+      return;
+    }
+
+    for (const note of unnamed) {
+      try {
+        await this.ensureNote(note.id);
+      } catch {
+        // It keeps its fallback title. Nothing else depends on this having worked.
+      }
+    }
+
+    this.bump();
+    this.onChanged?.();
   }
 
   listNotes(): Note[] {
@@ -125,7 +370,7 @@ export class VaultStore {
     }
 
     while (current && !current.isSnapshot) {
-      diffs.push(current.payload);
+      diffs.push(bodyOf(current));
       current = current.parentId ? this.versions.get(current.parentId) : undefined;
     }
 
@@ -133,7 +378,7 @@ export class VaultStore {
       throw new Error('This history is missing a snapshot and cannot be rebuilt.');
     }
 
-    const snapshot = open(this.key, current.payload);
+    const snapshot = open(this.key, bodyOf(current));
     diffs.reverse();
     const text = replay(snapshot, diffs.map((diff) => open(this.key, diff)));
 
@@ -156,12 +401,22 @@ export class VaultStore {
       return 'Untitled';
     }
 
+    // Keyed on the sealed name rather than on a revision counter: a rename replaces that string, so
+    // an entry can never outlive the name it was decrypted from.
+    const cached = this.paths.get(noteId);
+    if (cached && cached.sealed === note.name && note.name !== null) {
+      return cached.path;
+    }
+
     if (note.name) {
+      let path: string;
       try {
-        return open(this.key, note.name);
+        path = open(this.key, note.name);
       } catch {
-        return 'Unreadable name';
+        path = 'Unreadable name';
       }
+      this.paths.set(noteId, { sealed: note.name, path });
+      return path;
     }
 
     return this.derivedTitle(noteId);
@@ -178,6 +433,13 @@ export class VaultStore {
   }
 
   private derivedTitle(noteId: string): string {
+    // The body is what the title is read out of, and it is not downloaded until the note is opened.
+    // "Untitled" until then, rather than an error where a name should be - `loadUnnamedTitles`
+    // fetches these in the background and redraws.
+    if (!this.hasBodies(noteId)) {
+      return 'Untitled';
+    }
+
     let text: string;
     try {
       text = this.textOf(noteId);
@@ -198,6 +460,10 @@ export class VaultStore {
    * filesystem mounts the same vault.
    */
   tree(): TreeNode[] {
+    if (this.treeCache && this.treeCache.revision === this.revision) {
+      return this.treeCache.nodes;
+    }
+
     const root: TreeNode = { path: '', name: '', children: [] };
 
     /** Walks down to a folder, bringing each level into being the first time it is asked for. */
@@ -253,7 +519,9 @@ export class VaultStore {
       return nodes;
     };
 
-    return sort(root.children);
+    const nodes = sort(root.children);
+    this.treeCache = { revision: this.revision, nodes };
+    return nodes;
   }
 
   /** Every folder path in the vault, so the UI can offer them and show empty ones. */
@@ -275,6 +543,47 @@ export class VaultStore {
     }
 
     return [...found].sort();
+  }
+
+  /**
+   * Whether `candidate` is `ancestor`, or descends from it.
+   *
+   * This is the question that decides whether a new head can simply be adopted. A version that
+   * descends from the one the editor is holding contains it - taking it loses nothing. A version
+   * that does not is a *sibling*: both devices built on the same parent, and the two edits exist
+   * only on their own branches. Adopting one of those silently drops the other, which is the shape
+   * of every "it overwrote my edit" report there has ever been about this app.
+   *
+   * Both parents are followed, so a merge counts as descending from both of the branches it joined
+   * and a merged note stops being seen as forked.
+   */
+  descendsFrom(candidate: string, ancestor: string): boolean {
+    const seen = new Set<string>();
+    const queue = [candidate];
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (id === ancestor) {
+        return true;
+      }
+      if (seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+
+      const version = this.versions.get(id);
+      if (!version) {
+        continue;
+      }
+      if (version.parentId) {
+        queue.push(version.parentId);
+      }
+      if (version.mergeParentId) {
+        queue.push(version.mergeParentId);
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -351,15 +660,26 @@ export class VaultStore {
   }
 
   private record(version: NoteVersion, text: string): void {
-    this.versions.set(version.id, version);
+    this.mergeVersion(version);
     this.materialised.set(version.id, text);
 
     const note = this.notes.get(version.noteId);
-    if (note) {
-      this.notes.set(note.id, { ...note, headVersionId: version.id, updatedAt: version.createdAt });
+    const updated = note
+      ? { ...note, headVersionId: version.id, updatedAt: version.createdAt }
+      : null;
+    if (updated) {
+      this.putNote(updated);
     }
 
-    this.cursor = Math.max(this.cursor, version.cursor);
+    // The cursor deliberately does not move here. This version's own cursor says where *it* landed,
+    // not that this device has seen everything below it: another device can hold a lower cursor
+    // that we have not pulled. In memory that only cost a re-pull, but the cursor is written to
+    // disk now, and one that runs ahead of the rows would make the next delta skip those versions
+    // for good. Only `pull` knows it has seen everything up to a point, so only `pull` moves it.
+    void writeChanges(this.vault.id, {
+      versions: [version],
+      notes: updated ? [updated] : [],
+    });
   }
 
   /** Creates a note at a path. The path is sealed before it leaves the device, like the body. */
@@ -390,6 +710,24 @@ export class VaultStore {
     text: string,
     options: { isNamed?: boolean; label?: string; mergeParentId?: string | null } = {},
   ): Promise<NoteVersion | null> {
+    // A note deleted on another device is still a row here, with a head and a readable history, so
+    // every part of a save works perfectly and the text lands somewhere nothing can ever show it
+    // again: the tree is built from `listNotes`, which filters tombstones out. The user is told
+    // their note was saved, and it is gone. Refusing is the only honest answer, and this is the
+    // kind of accident the user cannot perceive - see "Inform, never forbid" in CLAUDE.md, which
+    // exempts exactly that.
+    if (this.notes.get(noteId)?.deleted) {
+      throw new Error(
+        'This note was deleted on another device, so there is nowhere to save to. Copy anything ' +
+          'you need out of the editor before closing it.',
+      );
+    }
+
+    // Before anything is diffed: the base has to be the note's real text, not a version this
+    // device happens to be missing. `materialise` would refuse, but refusing mid-save is worse than
+    // waiting a moment for the bytes.
+    await this.ensureNote(noteId);
+
     const head = this.headOf(noteId);
     const previousText = head ? this.materialise(head) : '';
 
@@ -411,8 +749,59 @@ export class VaultStore {
     return version;
   }
 
+  // --- unsent edits --------------------------------------------------------------------------
+
+  /**
+   * Remembers text the server has not taken yet. Sealed, because it is note content.
+   *
+   * Called when a save fails rather than on every keystroke: a draft is insurance against the app
+   * closing while something is unsent, and writing one per keystroke would seal and stringify the
+   * whole note on a 1.2 second timer for the overwhelmingly common case where the save works.
+   */
+  keepDraft(noteId: string, text: string): void {
+    try {
+      localStorage.setItem(draftKey(this.vault.id, noteId), seal(this.key, text));
+    } catch {
+      // Over quota, or storage disabled. Nothing else depends on this having worked, and the app
+      // is then no worse off than before drafts existed.
+    }
+  }
+
+  /** The unsent edit for a note, if this device is holding one. */
+  draftOf(noteId: string): string | null {
+    try {
+      const sealed = localStorage.getItem(draftKey(this.vault.id, noteId));
+      return sealed ? open(this.key, sealed) : null;
+    } catch {
+      // A draft sealed under a different key, or corrupt. It cannot be shown, and throwing here
+      // would stop the note opening at all.
+      return null;
+    }
+  }
+
+  dropDraft(noteId: string): void {
+    try {
+      localStorage.removeItem(draftKey(this.vault.id, noteId));
+    } catch {
+      // See `keepDraft`.
+    }
+  }
+
+  /** Every note on this device with an edit the server has not taken. Drives the retry. */
+  notesWithDrafts(): string[] {
+    const prefix = `${DRAFT_KEY}${this.vault.id}.`;
+    try {
+      return Object.keys(localStorage)
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length));
+    } catch {
+      return [];
+    }
+  }
+
   /** Restoring writes the old text forward as a new version - history is never rewritten. */
   async restore(noteId: string, versionId: string): Promise<void> {
+    await this.ensureNote(noteId);
     const text = this.materialise(versionId);
     await this.saveNote(noteId, text, { label: undefined });
   }
@@ -478,6 +867,7 @@ export class VaultStore {
   }
 
   private persistFolders(): void {
+    this.bump();
     saveEmptyFolders(this.vault.id, this.emptyFolders);
   }
 
@@ -526,8 +916,9 @@ export class VaultStore {
     const previousParent = parentPath(this.pathOf(noteId));
 
     const note = await api.renameNote(noteId, seal(this.key, tidied));
-    this.notes.set(note.id, note);
-    this.cursor = Math.max(this.cursor, note.cursor);
+    this.putNote(note);
+    // As in `record`: our own write does not tell us where everyone else's writes are.
+    void writeChanges(this.vault.id, { notes: [note] });
 
     this.keepIfNowEmpty(previousParent);
     this.pruneFolders();
@@ -612,7 +1003,9 @@ export class VaultStore {
     await api.deleteNote(noteId);
     const note = this.notes.get(noteId);
     if (note) {
-      this.notes.set(noteId, { ...note, deleted: true });
+      const tombstone = { ...note, deleted: true };
+      this.putNote(tombstone);
+      void writeChanges(this.vault.id, { notes: [tombstone] });
     }
     this.keepIfNowEmpty(folder);
   }
@@ -648,10 +1041,14 @@ export class VaultStore {
    * going into the archive as whatever could be salvaged: one broken history must not cost the user
    * the other two hundred notes, and a file full of an error message is not the note it claims to be.
    */
-  exportEntries(): {
+  async exportEntries(onProgress?: (done: number, total: number) => void): Promise<{
     notes: { name: string; text: string }[];
     unreadable: { name: string; reason: string }[];
-  } {
+  }> {
+    // The one operation that needs every note. Opening a vault no longer downloads them, so this is
+    // where the download happens, with progress - it is the slowest thing the client does.
+    await this.ensureAll(onProgress);
+
     const notes: { name: string; text: string }[] = [];
     const unreadable: { name: string; reason: string }[] = [];
     const used = new Set<string>();
