@@ -10,7 +10,7 @@
  * holds rows, hands out cursors, and answers the four questions the store asks. A test that wants to
  * know what the server ended up holding reads `serverState`.
  */
-import type { ChangesResponse, Note, NoteVersion } from '../../src/types';
+import type { ChangesResponse, Note, NoteVersion, SyncEvent } from '../../src/types';
 
 interface NewVersionBody {
   id: string;
@@ -55,6 +55,7 @@ export function setOffline(value: boolean): void {
 export function resetServer(): void {
   notes.clear();
   versions.clear();
+  broadcasts.length = 0;
   cursor = 0;
   clock = 0;
   offline = false;
@@ -116,6 +117,40 @@ function buildVersion(
   } as NoteVersion;
 }
 
+/**
+ * Change events the server has broadcast, in order - the sync socket, as a list.
+ *
+ * A test reads these and hands them to a device's `absorb`, which is what the real client does with
+ * a socket frame. That keeps the interesting half honest: the rows a test absorbs are the rows the
+ * server actually decided to push, trimmed payloads included, rather than ones the test made up.
+ */
+export const broadcasts: SyncEvent[] = [];
+
+/** Above this a payload is left out of the push, exactly as `InProcessSyncNotifier` does. */
+const MAX_PUSHED_PAYLOAD = 256 * 1024;
+
+function broadcast(vaultId: string, at: number, changedNotes: Note[], changedVersions: NoteVersion[]): void {
+  broadcasts.push({
+    kind: 'change',
+    vaultId,
+    cursor: at,
+    originDeviceId: null,
+    notes: changedNotes.map((note) => ({ ...note })),
+    versions: changedVersions.map((version) => ({
+      ...version,
+      payload:
+        version.payload != null && version.payload.length > MAX_PUSHED_PAYLOAD ? null : version.payload,
+    })),
+    present: [],
+  });
+}
+
+/** The last event for a vault, which is what a connected device would just have received. */
+export function lastBroadcast(vaultId: string): SyncEvent {
+  const events = broadcasts.filter((event) => event.vaultId === vaultId);
+  return events[events.length - 1];
+}
+
 export const api = {
   createNote: async (
     vaultId: string,
@@ -140,7 +175,9 @@ export const api = {
 
     // NotesService.CreateNote forces this, because there is no parent to diff against.
     const initial = { ...body.initialVersion, isSnapshot: true, parentId: null };
-    versions.set(initial.id, buildVersion(initial, note.id, vaultId, at, stamp));
+    const initialVersion = buildVersion(initial, note.id, vaultId, at, stamp);
+    versions.set(initial.id, initialVersion);
+    broadcast(vaultId, at, [note], [initialVersion]);
 
     return { ...note };
   },
@@ -163,7 +200,9 @@ export const api = {
     // head is accepted, because two devices editing offline legitimately produce siblings and the
     // DAG is what makes that representable. The head pointer is simply the last write. Everything
     // that keeps this from losing an edit lives in the client.
-    notes.set(noteId, { ...note, headVersionId: version.id, cursor: at, updatedAt: stamp });
+    const moved = { ...note, headVersionId: version.id, cursor: at, updatedAt: stamp };
+    notes.set(noteId, moved);
+    broadcast(note.vaultId, at, [moved], [version]);
 
     return { ...version };
   },
@@ -209,6 +248,8 @@ export const api = {
     // it was filed.
     const renamed = { ...note, name: sealedName, cursor: nextCursor(), updatedAt: now() };
     notes.set(id, renamed);
+    // A rename appends no version, so the note row is the whole of the change.
+    broadcast(note.vaultId, renamed.cursor, [renamed], []);
     return { ...renamed };
   },
 
@@ -221,6 +262,8 @@ export const api = {
       return;
     }
     // A tombstone, not a delete: an offline client learns the note is gone by syncing the row.
-    notes.set(id, { ...note, deleted: true, cursor: nextCursor(), updatedAt: now() });
+    const tombstone = { ...note, deleted: true, cursor: nextCursor(), updatedAt: now() };
+    notes.set(id, tombstone);
+    broadcast(note.vaultId, tombstone.cursor, [tombstone], []);
   },
 };

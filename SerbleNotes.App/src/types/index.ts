@@ -55,10 +55,28 @@ export interface ChangesResponse {
   versions: NoteVersion[];
 }
 
+/** One of this account's devices, and the note it has open. */
+export interface PresenceEntry {
+  deviceId: string;
+  /** Null when that device is in the vault but has no note open. */
+  noteId: string | null;
+}
+
+/**
+ * What comes down the sync socket.
+ *
+ * A change carries the rows that changed, ciphertext included, so the device on the other end can
+ * show the edit without a round trip of its own - see `VaultStore.absorb` for why that is safe to
+ * trust and what happens when it cannot be.
+ */
 export interface SyncEvent {
+  kind: 'change' | 'presence' | 'pong';
   vaultId: string;
   cursor: number;
   originDeviceId: string | null;
+  notes: Note[];
+  versions: NoteVersion[];
+  present: PresenceEntry[];
 }
 
 export interface NotesUser {

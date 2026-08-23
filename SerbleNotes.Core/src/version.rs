@@ -93,11 +93,52 @@ pub fn replay(snapshot: &str, diffs_json: &str) -> Result<String, CoreError> {
 }
 
 /// Three-way merge of two branches against their common ancestor.
+///
+/// A clean merge is returned exactly as `diffy` produced it, byte for byte - that path is what the
+/// text corpus is checked against and nothing here may touch it.
+///
+/// A conflict is re-merged with every side newline-terminated first. `diffy` writes each marker
+/// straight after the section before it, so a side whose last line has no newline gets the marker
+/// welded onto its own text:
+///
+/// ```text
+/// <<<<<<< ours
+/// hgggggg||||||| original
+/// base=======
+/// ```
+///
+/// That is unreadable, it is not what any tool that reads conflict markers expects, and in a
+/// markdown editor the lone `=======` underneath a line of text is a setext heading, so the note
+/// renders the mangled line as a title. Padding is safe here because it can only ever apply to a
+/// document that already has markers in it and is going to be edited by hand. It is deliberately
+/// *not* applied on the clean path, where a trailing newline the user did not type would be a
+/// change to their note.
+///
+/// Padding can also resolve a conflict that only existed because of the missing newline, so the
+/// second attempt reports its own outcome rather than being assumed to have conflicted.
 #[wasm_bindgen]
 pub fn merge3(ancestor: &str, ours: &str, theirs: &str) -> MergeOutcome {
     match merge(ancestor, ours, theirs) {
         Ok(text) => MergeOutcome { text, conflicted: false },
-        Err(text) => MergeOutcome { text, conflicted: true },
+        Err(_) => {
+            let ancestor = newline_terminated(ancestor);
+            let ours = newline_terminated(ours);
+            let theirs = newline_terminated(theirs);
+
+            match merge(&ancestor, &ours, &theirs) {
+                Ok(text) => MergeOutcome { text, conflicted: false },
+                Err(text) => MergeOutcome { text, conflicted: true },
+            }
+        }
+    }
+}
+
+/// The text with a trailing newline, unless it is empty or already has one.
+fn newline_terminated(text: &str) -> String {
+    if text.is_empty() || text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n")
     }
 }
 

@@ -31,4 +31,33 @@ public class SyncVersion {
     public int Size { get; set; }
     public long Cursor { get; set; }
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Maps a stored row to what sync sends, once the row is already in memory.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not used by the metadata-only query in <c>VersionRepo</c>: that one has to be
+    /// translated to SQL, and a method call would be evaluated on the client, which means reading
+    /// the payload column that the whole path exists to avoid.
+    /// </remarks>
+    public static SyncVersion From(Database.Schema.NoteVersion v, string? payload) {
+        return new SyncVersion {
+            Id = v.Id,
+            NoteId = v.NoteId,
+            VaultId = v.VaultId,
+            ParentId = v.ParentId,
+            MergeParentId = v.MergeParentId,
+            IsSnapshot = v.IsSnapshot,
+            IsNamed = v.IsNamed,
+            Payload = payload,
+            Label = v.Label,
+            DeviceId = v.DeviceId,
+            Size = v.Size,
+            Cursor = v.Cursor,
+            CreatedAt = v.CreatedAt
+        };
+    }
+
+    /// <summary>The same row with its own ciphertext, for pushing a change that just happened.</summary>
+    public static SyncVersion From(Database.Schema.NoteVersion v) => From(v, v.Payload);
 }

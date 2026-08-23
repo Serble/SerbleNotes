@@ -409,6 +409,153 @@ p.small, span.small, .small { font-size: 0.82rem; }
   50% { opacity: 0.2; }
 }
 
+/* ---------------------------------------------------------------- merge conflicts */
+
+/* A conflict is the one thing this app writes into somebody's note that they did not type, so the
+   card says what happened and offers the choice rather than looking like an error. --warning
+   rather than --danger: nothing is broken and nothing is lost - two versions exist and one has to
+   be picked. Padding, never margin: the editor measures a block widget with getBoundingClientRect,
+   which does not include margins, so a margin here is space the editor does not know about and
+   every line below it sits that much lower than the editor thinks it does. */
+.cm-conflict {
+  margin: 0;
+  padding: 0.55rem 0;
+  font-family: var(--sans);
+  cursor: default;
+}
+.cm-conflict > * + * { margin-top: 0.5rem; }
+
+.cm-conflict-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.cm-conflict-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning);
+}
+.cm-conflict-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex: 1;
+}
+
+/* Side by side where there is room, stacked where there is not. The two sides are deliberately
+   identical - neither is highlighted or preselected, because the app has no idea which one the
+   person wanted and a "suggested" side would be a guess dressed up as an answer. */
+.cm-conflict-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+@media (max-width: 700px) {
+  .cm-conflict-sides { grid-template-columns: 1fr; }
+}
+
+.cm-conflict-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  min-width: 0;
+}
+.cm-conflict-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.cm-conflict-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  /* A conflict is usually a line or two; a pasted essay must not push the buttons off the screen. */
+  max-height: 14rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.cm-conflict-empty { color: var(--muted); font-style: italic; }
+
+.cm-conflict-foot {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.cm-conflict-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  align-self: flex-start;
+  min-height: var(--control);
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.cm-conflict-button:hover { border-color: var(--accent); color: var(--accent); }
+.cm-conflict-text-toggle { background: transparent; }
+
+/* The bar above a conflict shown as its markers, holding the way back to the card. Same height and
+   the same button as the card's header, because it is the same control in its other state. */
+.cm-conflict-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0 0.35rem;
+  font-family: var(--sans);
+  cursor: default;
+}
+.cm-conflict-bar .cm-conflict-note { flex: 1; }
+
+/* The region itself, as written. `livePreview` does not decorate anything in here, so this is only
+   setting it in monospace and colouring the markers - the text is otherwise exactly what the note
+   says, which is the whole point of having asked for it. */
+.cm-conflict-raw {
+  background: var(--surface);
+  font-family: var(--mono);
+  /* Whatever markdown would have done to it, it does not do here: no heading sizes, no hidden
+     punctuation, no emphasis. A setext underline is a row of equals signs again. */
+  font-size: 0.85rem;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.6;
+}
+.cm-conflict-raw-marker {
+  color: var(--warning);
+}
+
+/* Another of this account's devices has this note open. Quiet: it is information, not a warning,
+   and it sits on a bar whose job is the note's name. The dot is the same 6px as the save state's,
+   because they are the same kind of mark and two sizes would read as two kinds of thing. */
+.presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  padding: 0 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: default;
+}
+.presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
 /* ---------------------------------------------------------------- vault list */
 
 .page {

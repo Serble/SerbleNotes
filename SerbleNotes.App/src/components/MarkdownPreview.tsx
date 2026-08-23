@@ -1,4 +1,5 @@
 import { marked } from 'marked';
+import { findConflicts } from './conflicts';
 import { useEffect, useMemo, useRef } from 'react';
 import { copyText } from '../services/clipboard';
 import { bindLinks, cssIn, sanitiseHtml, scopeCss } from './noteHtml';
@@ -55,6 +56,36 @@ function completeEmptyTasks(text: string): string {
     .join('\n');
 }
 
+/**
+ * Marks up a conflict so it reads as one rather than as a heading.
+ *
+ * This renderer shows what a note said at a point in the past, and a version written during a merge
+ * has conflict markers in it. Left alone they are bad markdown: a lone `=======` under a line of
+ * prose is a setext heading, so the note draws half of the conflict as a title, at the size a title
+ * gets. The editor replaces the whole region with a card offering the choice (`conflictView.ts`);
+ * nothing can be resolved *here*, because this is a version that has already happened, so the region
+ * is just wrapped in a block that renders it as the literal text it is.
+ *
+ * Every line is kept exactly as written, markers included. An old version showing something other
+ * than what it said would be worse than one that renders plainly.
+ */
+function fenceConflicts(text: string): string {
+  const conflicts = findConflicts(text);
+  if (conflicts.length === 0) {
+    return text;
+  }
+
+  let out = '';
+  let at = 0;
+  for (const conflict of conflicts) {
+    out += text.slice(at, conflict.from);
+    out += `\n\`\`\`conflict\n${text.slice(conflict.from, conflict.to)}\n\`\`\`\n`;
+    at = conflict.to;
+  }
+
+  return out + text.slice(at);
+}
+
 /** Long enough to be read, short enough that it is gone before you look again. */
 const CONFIRM_MS = 1400;
 
@@ -72,7 +103,7 @@ let scopes = 0;
 export function MarkdownPreview({ text }: { text: string }) {
   const scope = useMemo(() => `preview-${(scopes += 1)}`, []);
   const rendered = useMemo(() => {
-    const raw = marked.parse(completeEmptyTasks(text)) as string;
+    const raw = marked.parse(fenceConflicts(completeEmptyTasks(text))) as string;
     return {
       html: sanitiseHtml(raw),
       css: scopeCss(cssIn(raw), `[data-note-css="${scope}"]`),

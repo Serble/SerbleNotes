@@ -118,7 +118,8 @@ public class VaultsController(
         vault.UpdatedAt = DateTime.UtcNow;
         await vaults.UpdateVault(vault);
 
-        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, vault.Cursor, DeviceId);
+        // A password change re-wraps the key and touches no note, so there are no rows to carry.
+        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, vault.Cursor, DeviceId, [], []);
         return NoContent();
     }
 

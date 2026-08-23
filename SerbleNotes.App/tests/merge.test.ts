@@ -113,6 +113,36 @@ test('an unsaved local edit that clashes comes back with conflict markers', asyn
   assert.match(pc.editor.text, /the phone rewrote it/);
 });
 
+test('the conflict warning clears once the markers are gone', async () => {
+  const { pc, phone } = await twoDevices('the line\n');
+
+  phone.type('the phone rewrote it\n');
+  await phone.autosave();
+  pc.type('the computer rewrote it\n');
+  await pc.remoteChange();
+
+  assert.equal(pc.editor.conflicted, true);
+
+  // What resolving a conflict in the editor comes to: the markers are edited away.
+  pc.type('the version we settled on\n');
+
+  assert.equal(pc.editor.conflicted, false);
+});
+
+test('the conflict warning stays while any marker is left', async () => {
+  const { pc, phone } = await twoDevices('the line\n');
+
+  phone.type('the phone rewrote it\n');
+  await phone.autosave();
+  pc.type('the computer rewrote it\n');
+  await pc.remoteChange();
+
+  // Half-resolved: one marker deleted, the rest still there.
+  pc.type(pc.editor.text.replace('>>>>>>>', 'still here'));
+
+  assert.equal(pc.editor.conflicted, true);
+});
+
 test('the version written after a merge records both parents', async () => {
   const { pc, phone } = await twoDevices('middle\n');
 

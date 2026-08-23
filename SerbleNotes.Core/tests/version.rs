@@ -469,3 +469,67 @@ fn the_fingerprint_distinguishes_documents_that_differ_only_slightly() {
         assert!(apply_diff(nearly, &diff).is_err(), "fingerprint did not distinguish {nearly:?}");
     }
 }
+
+/// Every conflict marker begins a line of its own.
+///
+/// `diffy` writes a marker straight after the section before it, so a side whose last line has no
+/// trailing newline used to come back with the marker welded onto its own text - `hgggggg|||||||
+/// original`. Anything that reads conflict markers expects them at the start of a line, and in this
+/// app's editor a lone `=======` under a line of prose is a setext heading, so the mangled line
+/// rendered as a title. This is the shape of a one-line note edited on two devices, which is about
+/// the most ordinary conflict there is.
+#[test]
+fn conflict_markers_never_share_a_line_with_content() {
+    let outcome = merge3("base", "ours text", "theirs text");
+    assert!(outcome.conflicted());
+
+    for line in outcome.text().lines() {
+        for marker in ["<<<<<<<", "|||||||", "=======", ">>>>>>>"] {
+            if line.contains(marker) {
+                assert!(
+                    line.starts_with(marker),
+                    "marker {marker} is not at the start of {line:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The same, for every shape in the corpus that can be made to conflict.
+#[test]
+fn no_text_shape_can_weld_a_marker_onto_a_line() {
+    for (name, ancestor) in text_corpus() {
+        let ours = format!("{ancestor}ours");
+        let theirs = format!("{ancestor}theirs");
+
+        let outcome = merge3(&ancestor, &ours, &theirs);
+        if !outcome.conflicted() {
+            continue;
+        }
+
+        for line in outcome.text().lines() {
+            for marker in ["<<<<<<<", "|||||||", "=======", ">>>>>>>"] {
+                assert!(
+                    !line.contains(marker) || line.starts_with(marker),
+                    "corpus {name} welded {marker} into {line:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A clean merge is still byte for byte what it always was.
+///
+/// The padding above must never reach this path: a trailing newline the user did not type is a
+/// change to their note, and the corpus is full of documents that deliberately end without one.
+#[test]
+fn a_clean_merge_does_not_gain_a_trailing_newline() {
+    let ancestor = "one\ntwo\nthree";
+    let ours = "one CHANGED\ntwo\nthree";
+    let theirs = "one\ntwo\nthree CHANGED";
+
+    let outcome = merge3(ancestor, ours, theirs);
+    assert!(!outcome.conflicted());
+    assert_eq!(outcome.text(), "one CHANGED\ntwo\nthree CHANGED");
+    assert!(!outcome.text().ends_with('\n'));
+}

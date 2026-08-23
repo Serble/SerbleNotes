@@ -28,9 +28,11 @@ public class NotesService(
         // The first version is always a full document: there is no parent to diff against.
         request.InitialVersion.IsSnapshot = true;
         request.InitialVersion.ParentId = null;
-        await versions.CreateVersion(BuildVersion(vault, note, request.InitialVersion, cursor, deviceId, now));
+        NoteVersion initial = BuildVersion(vault, note, request.InitialVersion, cursor, deviceId, now);
+        await versions.CreateVersion(initial);
 
-        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId);
+        await sync.NotifyVaultChanged(
+            vault.OwnerId, vault.Id, cursor, deviceId, [note], [SyncVersion.From(initial)]);
         return note;
     }
 
@@ -49,7 +51,8 @@ public class NotesService(
         note.UpdatedAt = now;
         await notes.UpdateNote(note);
 
-        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId);
+        await sync.NotifyVaultChanged(
+            vault.OwnerId, vault.Id, cursor, deviceId, [note], [SyncVersion.From(version)]);
         return version;
     }
 
@@ -61,7 +64,8 @@ public class NotesService(
         note.UpdatedAt = DateTime.UtcNow;
         await notes.UpdateNote(note);
 
-        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId);
+        // A rename appends no version, so the note row is the whole of the change.
+        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId, [note], []);
     }
 
     public async Task DeleteNote(Vault vault, Note note, string? deviceId) {
@@ -74,7 +78,7 @@ public class NotesService(
         note.UpdatedAt = DateTime.UtcNow;
         await notes.UpdateNote(note);
 
-        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId);
+        await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId, [note], []);
     }
 
     private static NoteVersion BuildVersion(Vault vault, Note note, CreateVersionRequest request, long cursor,

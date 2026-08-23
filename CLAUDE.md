@@ -502,6 +502,72 @@ that file, so a note cannot look like two different documents depending on where
   elements, the same rule does colour headings. Fixing that would mean giving markdown's own output
   real tag names in the editor, which is a change to how the live preview works rather than to this.
 
+### Merge conflicts
+
+A conflict is the one thing this app writes into somebody's note that they did not type, and it
+arrives in a notation borrowed from a command-line tool. Left as text it is bad markdown *and* a bad
+question: a lone `=======` under a line of prose is a setext heading, so the note draws half the
+conflict as a title, and resolving one means deleting exactly the right seven characters in three
+places without deleting anything else. So the region is drawn as the choice it is - two versions
+side by side, a button under each - by `conflictView.ts`, `conflictWidget.ts` and `conflicts.ts`.
+
+- **The core stopped welding markers onto prose.** `diffy` writes each marker straight after the
+  section before it, so a side whose last line had no trailing newline came back as
+  `hgggggg||||||| original`. `merge3` now re-merges with every side newline-terminated when the
+  first attempt conflicts - and only then, because on the clean path a trailing newline the user did
+  not type is a change to their note. Padding can also resolve a conflict that only existed because
+  of the missing newline, so the second attempt reports its own outcome.
+- **The parser reads welded markers too, and has to.** Fixing the core stopped *new* conflicts being
+  mangled and did nothing for the ones already sitting in people's notes. A parser that only accepts
+  a marker at the start of a line reads `bbbbbbb>>>>>>> theirs` as ordinary text, never finds the
+  closing marker, treats the region as unclosed and draws nothing - so the notes that most need the
+  conflict shown as a choice are exactly the ones that would get no card at all. `markerIn` looks
+  anywhere in the line, and that is safe because it is only ever asked about lines *between* an
+  opener and its closer: `|||||||` in the middle of ordinary prose is ordinary prose, but the same
+  characters inside a conflict are the divider they look like. Resolving one writes clean text, so a
+  welded conflict repairs itself the moment it is answered.
+- **`livePreview` refuses any node that *overlaps* a conflict**, not one that starts inside it, and
+  that distinction is the whole of it. The markdown parser has never heard of conflict markers, so a
+  `=======` inside one is a setext heading underline - and a setext underline applies to the
+  paragraph *before* it. With no blank line in between, that heading node begins outside the region
+  and reaches in, so everything from the paragraph down rendered at title size. Containment was the
+  obvious test and the wrong one. It applies whether the conflict is drawn or shown as its markers:
+  the card replaces its own lines either way, and what has to be stopped is markup reaching out of
+  them.
+- **`conflictsIn` is a state field**, because three things want the conflict list and finding them
+  walks the whole document. They can only change when the text does.
+- **"Text" and "Resolve" are one control in two states**, like a table's "Text" and "Table". The
+  first lives in the card's header; the second is a bar above the region with the button in the same
+  place, because the button that got you into the source belongs to the card you just replaced, and
+  without a way back the source is a room with no door. The bar is a block widget rather than a
+  floating control - it has a line of its own, so there is nothing to position and nothing to keep in
+  step when the region moves.
+- **A block replace decoration, so it comes from a state field**, exactly as a table does: replacing
+  eight lines with one card changes the block structure of the document, and a view plugin only sees
+  the viewport.
+- **Nothing is preselected and nothing is recommended.** The app has no idea which version the
+  person wanted, and a highlighted "suggested" side would be a guess dressed as an answer. "Keep
+  both" exists because it is what people often want and doing it by hand means resolving the
+  conflict and then retyping the half that was thrown away.
+- **"Text" puts the markers back**, the twin of a table's button and for the same reason: a drawn
+  thing that cannot be seen as its source cannot be checked or fixed by hand. Shown that way, every
+  line of the region gets `.cm-conflict-raw` so the markers read as markers rather than as the
+  markdown they accidentally are.
+- **An empty side says so.** "(nothing - this version deleted it)" - a deletion is a real answer to
+  the question and has to be legible as one rather than as an empty box.
+- **Resolving is an ordinary edit**, so undo puts the conflict back and the autosave writes the
+  result away knowing nothing about merges. `resolutionChange` is separate from the dispatch because
+  it is where this goes quietly wrong: the region stops at the *end* of the `>>>>>>>` line and the
+  document's own newline follows it, so a replacement that keeps its trailing newline inserts two.
+  A side that deleted the passage takes that newline with it, or the deletion comes out as a blank
+  line. Both were found on a real phone and both have tests.
+- **The rendered preview fences them** rather than resolving them (`fenceConflicts` in
+  `MarkdownPreview.tsx`). History shows what a note said at a point in the past; there is nothing to
+  resolve, only something to read, and it must read as what was written.
+- **The warning clears when the last marker goes**, checked with a substring scan in `typed` rather
+  than a parse, because that runs on every keystroke and only has to be right about whether any are
+  left.
+
 ### Code blocks
 
 A fenced block is drawn as a card with the language on a chip in its corner, and its contents are
@@ -778,10 +844,57 @@ or the edited cell is in, and "Insert table" when there is neither.
 
 ### Sync
 
-WebSocket push, Redis pub/sub for fan-out across backend instances. A client holds a socket, receives
-"vault X changed to cursor N" events, then pulls the encrypted versions it's missing over HTTP. The
-socket carries notifications, not content. Clients must also work fully offline and reconcile on
-reconnect - sync is an optimisation over a local-first store, not the source of truth.
+WebSocket push, Redis pub/sub for fan-out across backend instances (Redis not built - fan-out is
+in-process today, which is correct for one instance). Clients must also work fully offline and
+reconcile on reconnect - sync is an optimisation over a local-first store, not the source of truth.
+
+**The socket carries the rows, not just a nudge.** It used to say "vault X is at cursor N" and the
+client answered with an HTTP pull. That was a round trip on a connection that had just proved it
+works - most of the delay between one device typing and the other showing it - and the pulls raced
+each other when two writes landed together. `SyncEvent` now carries the changed notes and versions,
+ciphertext included. It is still a dumb relay: the server can no more read a pushed version than a
+stored one. A payload over 256 KB is pushed with `payload: null` and the client fetches that note the
+way it already does for every note it opens, so this is an optimisation the client never has to
+trust.
+
+**`VaultStore.absorb` decides whether a pushed event is enough on its own.** The cursor rule from the
+other side: a device may only advance its cursor to a point where it has seen *everything* below it,
+and a pushed event proves one write happened, not that none was missed while the socket was away. The
+proof is contiguity - one write reserves exactly one cursor value and every device gets every event,
+so an unbroken stream arrives one higher each time. Equal to ours plus one means nothing can have
+happened in between; anything else means pull. The rows are kept either way, so the pull that follows
+is answered from memory.
+
+**The client pings, and gives up on a socket that stops answering.** This is the failure a WebSocket
+cannot report: the path dies without either end sending a close frame - the normal way a mobile
+connection ends - and the socket object stays `OPEN` forever. `onclose` never fires, nothing
+reconnects, and the client sits there believing it is live while receiving nothing. That was "I have
+to reload the page for it to notice edits from my other device". `sync.ts` sends `{kind:"ping"}` every
+20s, the server answers `pong`, and two missed answers (45s of silence) means the socket is closed by
+hand - which is what makes `onclose` fire and the reconnect happen. Backoff is 500ms to 15s, not the
+1s-to-30s it was: a reconnect is how a device finds out what it missed.
+
+**Reconnecting is `resync`, and the order is the point** - pull, merge, then send what could not be
+sent. Saving first parents the new version on a head this device only believes is current, which is
+a fork. See `services/noteSync.ts`.
+
+**Presence is your other devices, never another person.** Vaults are single-owner, so a `watch`
+command tells the server what this device has open and every other device of the same account is
+told. The note bar shows "Open elsewhere" and nothing more - not a count, not a name. Wording it as
+though a second person were there would be inventing one out of a phone left open on the sofa. The
+socket remembers what it is watching and says it again after a reconnect, because the server holds
+presence against the connection and that connection is gone.
+
+**A remote edit is merged into the open editor immediately**, cursor kept. `MarkdownEditor` narrows
+an external change to the part that actually differs rather than replacing the document, so
+CodeMirror can map the selection through it - someone typing in the third paragraph stays there when
+a line arrives at the top.
+
+**nginx must forward the upgrade.** A `location` block that only does `proxy_pass` strips the
+WebSocket handshake, and the socket then never connects at all - no error the client can report, just
+silence and a close code of 1006. It needs `proxy_http_version 1.1`, `Upgrade: $http_upgrade` and
+`Connection: "upgrade"`. This was real: live sync had never worked through the deployed URL, and the
+symptom was indistinguishable from the client bug above.
 
 ### The backend serves the web client
 

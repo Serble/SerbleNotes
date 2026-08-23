@@ -56,7 +56,7 @@ import type { VaultStore } from "../services/store";
 import { storeFor } from "../services/stores";
 import { keyFor, unlock } from "../services/vaultKeys";
 import { storageWarning } from "../services/secrets";
-import type { NoteVersion, Vault } from "../types";
+import type { NoteVersion, PresenceEntry, SyncEvent, Vault } from "../types";
 
 const AUTOSAVE_MS = 1200;
 
@@ -286,6 +286,16 @@ function Workspace({
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
 
+  /**
+   * Which of this account's other devices are in this vault, and what they have open.
+   *
+   * Vaults are single-owner, so this is never another person - it is this user, somewhere else.
+   * Anything shown from it has to be worded that way; "someone is editing this" would be inventing
+   * a second person out of a phone left open on the sofa.
+   */
+  const [presence, setPresence] = useState<PresenceEntry[]>([]);
+  const socketRef = useRef<SyncSocket | null>(null);
+
   // On a narrow screen the file tree and the side panels cover the editor rather than sitting
   // beside it, so whether they are showing is state rather than a media query alone.
   const [navOpen, setNavOpen] = useState(false);
@@ -441,16 +451,29 @@ function Workspace({
     };
   }, [store, openNote, reconcileNote, vault.id]);
 
-  /** Someone else changed this vault. Pull, then reconcile with whatever is in the editor. */
-  const handleRemoteChange = useCallback(async () => {
-    try {
-      await store.pull();
-      refresh();
-      await reconcileNote();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [store, reconcileNote]);
+  /**
+   * Another device changed this vault.
+   *
+   * The rows travel with the notification, so the ordinary case needs no request at all: absorb
+   * them, redraw, and merge into the editor. `absorb` says whether it is certain nothing was missed
+   * - if the cursors do not join up, something happened while this socket was away and only a pull
+   * can say what.
+   */
+  const handleRemoteChange = useCallback(
+    async (event: SyncEvent) => {
+      try {
+        const complete = await store.absorb(event);
+        if (!complete) {
+          await store.pull();
+        }
+        refresh();
+        await reconcileNote();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [store, reconcileNote],
+  );
 
   /**
    * This device can reach the server again. Pull what it missed, merge it with whatever is in the
@@ -470,15 +493,17 @@ function Workspace({
   }, [store, applyEditor]);
 
   useEffect(() => {
-    const socket = new SyncSocket(
-      (event) => {
+    const socket = new SyncSocket({
+      onChange: (event) => {
         if (event.vaultId === vault.id) {
-          void handleRemoteChange();
+          void handleRemoteChange(event);
         }
       },
-      () => void handleReconnect(),
-    );
+      onPresence: setPresence,
+      onReopen: () => void handleReconnect(),
+    });
     socket.connect();
+    socketRef.current = socket;
 
     // The socket is the better signal - it knows the server answered, not merely that the OS
     // thinks there is a network - but it can take its backoff to notice, and `online` fires the
@@ -489,9 +514,16 @@ function Workspace({
 
     return () => {
       socket.close();
+      socketRef.current = null;
       window.removeEventListener("online", online);
     };
   }, [vault.id, handleRemoteChange, handleReconnect]);
+
+  // Tell the account's other devices what this one is looking at. The socket remembers it and says
+  // it again after a reconnect, so this only has to fire when the answer changes.
+  useEffect(() => {
+    socketRef.current?.watch(vault.id, selected);
+  }, [vault.id, selected]);
 
   // Autosave. Every pause in typing that actually changed something becomes a version.
   useEffect(() => {
@@ -624,6 +656,16 @@ function Workspace({
     }
   };
 
+  /**
+   * Whether another of this account's devices has *this* note open.
+   *
+   * Deliberately not "how many": one other device and three are the same fact to someone deciding
+   * whether their next sentence is going to meet somebody else's. A count would be a number nobody
+   * acts on, taking room on a bar that is short of it.
+   */
+  const openElsewhere =
+    selected !== null && presence.some((entry) => entry.noteId === selected);
+
   const tree = store.tree();
   const folderPaths = store.folders();
   const everythingShut = collapse.allShut(folderPaths);
@@ -732,9 +774,9 @@ function Workspace({
       )}
       {conflicted && (
         <p className="warning banner">
-          This note was edited on another device at the same time. The parts
-          that clashed are marked with <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>{" "}
-          below - edit them and the markers away, and the result saves normally.
+          This note was edited in two places at once. Where the versions clashed
+          you will find both of them below - keep the one you want, or edit them
+          together by hand. Either way the result saves normally.
         </p>
       )}
 
@@ -923,6 +965,15 @@ function Workspace({
                 }
                 actions={
                   <>
+                    {openElsewhere && (
+                      <span
+                        className="presence"
+                        title="This note is open on another of your devices. Edits from it arrive here as they are saved, and are merged into what you are writing."
+                      >
+                        <span className="presence-dot" aria-hidden="true" />
+                        <span className="wide-only">Open elsewhere</span>
+                      </span>
+                    )}
                     <button
                       className={showDetails ? "ghost on" : "ghost"}
                       aria-pressed={showDetails}

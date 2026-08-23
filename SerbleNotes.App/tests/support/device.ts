@@ -23,7 +23,7 @@ import {
   type EditorState,
 } from '../../src/services/noteSync';
 import { VaultStore } from '../../src/services/store';
-import type { Vault } from '../../src/types';
+import type { SyncEvent, Vault } from '../../src/types';
 import { setOffline } from './fakeServer';
 
 export function newVault(id = 'vault-1'): Vault {
@@ -151,9 +151,25 @@ export class Device {
     this.editor = await this.net(() => commit(this.store, this.selected!, this.editor));
   }
 
-  /** The sync socket said the vault moved. */
+  /** The sync socket said the vault moved, and this device had to ask what changed. */
   async remoteChange(): Promise<void> {
     await this.pull();
+    if (this.selected) {
+      this.editor = await this.net(() => reconcile(this.store, this.selected!, this.editor));
+    }
+  }
+
+  /**
+   * A change arrived over the socket, rows and all - the live path.
+   *
+   * Mirrors `handleRemoteChange` in `VaultPage`: absorb, fall back to a pull when the cursors do
+   * not join up, then reconcile. No `net` around `absorb`, because nothing about it is a request.
+   */
+  async pushed(event: SyncEvent): Promise<void> {
+    const complete = await this.store.absorb(event);
+    if (!complete) {
+      await this.pull();
+    }
     if (this.selected) {
       this.editor = await this.net(() => reconcile(this.store, this.selected!, this.editor));
     }

@@ -68,7 +68,17 @@ export function typed(state: EditorState, text: string): EditorState {
   if (text === state.text) {
     return state;
   }
-  return { ...state, text, status: state.status === 'error' ? 'error' : 'saving' };
+
+  return {
+    ...state,
+    text,
+    // Resolving the last conflict is how the warning about them goes away. It is a substring scan
+    // rather than a parse because this runs on every keystroke, and it only has to be right about
+    // "are there any left" - a half-deleted marker still counts as one, which is the safe way for
+    // it to be wrong.
+    conflicted: state.conflicted && text.includes('<<<<<<<'),
+    status: state.status === 'error' ? 'error' : 'saving',
+  };
 }
 
 /** The state a note opens in. Call `store.ensureNote` first: the bytes have to be here. */

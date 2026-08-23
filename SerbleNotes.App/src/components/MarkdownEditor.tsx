@@ -9,6 +9,8 @@ import { codeWidths } from './codeWidths';
 import { ContextMenu, type MenuState } from './ContextMenu';
 import { copyCode } from './copyCode';
 import { editorMenu } from './editorMenu';
+import { conflictState } from './conflicts';
+import { conflictView } from './conflictView';
 import { htmlView } from './htmlView';
 import { linkClicks, linkPointer, pointedLink } from './linkClicks';
 import { listKeys } from './lists';
@@ -560,6 +562,10 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
         linkClicks,
         linkPointer,
         htmlView,
+        // Before the table extensions and the live preview: a conflict region is replaced whole, and
+        // nothing inside it should be decorated as the markdown it accidentally resembles.
+        conflictState,
+        conflictView,
         tables,
         tableView,
         tableControls,
@@ -601,12 +607,39 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
     // Only for text that arrived from somewhere else - a sync merge, or a restore. Replacing the
     // document on every keystroke would fight the user for the cursor.
     const current = editor.state.doc.toString();
-    if (current !== value) {
-      editor.dispatch({
-        changes: { from: 0, to: current.length, insert: value },
-        selection: { anchor: Math.min(editor.state.selection.main.anchor, value.length) },
-      });
+    if (current === value) {
+      return;
     }
+
+    // The change is narrowed to the part that actually differs, rather than replacing the whole
+    // document, and that is not an optimisation. A merge from another device usually lands nowhere
+    // near the caret, and CodeMirror maps a selection through a change automatically: narrow it and
+    // someone typing in the third paragraph stays in the third paragraph when a line arrives at the
+    // top. Replacing everything gave the caret nothing to be mapped through, so the old code had to
+    // guess - it clamped to the end of the new text, which threw the caret to a different place on
+    // every remote edit. That was survivable when this only happened on a reload; it is not now
+    // that edits arrive while you are typing.
+    let prefix = 0;
+    const shortest = Math.min(current.length, value.length);
+    while (prefix < shortest && current[prefix] === value[prefix]) {
+      prefix += 1;
+    }
+
+    let suffix = 0;
+    while (
+      suffix < shortest - prefix &&
+      current[current.length - 1 - suffix] === value[value.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+
+    editor.dispatch({
+      changes: {
+        from: prefix,
+        to: current.length - suffix,
+        insert: value.slice(prefix, value.length - suffix),
+      },
+    });
   }, [value]);
 
   return (

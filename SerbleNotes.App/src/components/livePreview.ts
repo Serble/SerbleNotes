@@ -1,4 +1,5 @@
 import { syntaxTree } from '@codemirror/language';
+import { touchesConflict } from './conflicts';
 import { displayWidth } from './tableFormat';
 import { isTextMode } from './tableState';
 import { codeBlockWidth, codeWidthsChanged } from './codeWidths';
@@ -349,6 +350,14 @@ function build(view: EditorView): DecorationSet {
       to,
       enter: (node) => {
         const name = node.name;
+
+        // Anything that touches a conflict is not the markdown it looks like. Overlap, not
+        // containment: the `=======` inside a conflict is a setext underline, and a setext heading
+        // starts at the paragraph *above* the region and reaches into it - so the node to refuse is
+        // one that began outside. See `touchesConflict`.
+        if (touchesConflict(state, node.from, node.to)) {
+          return false;
+        }
 
         if (name === 'HTMLTag') {
           // Held back rather than handled here: a tag means nothing on its own, and the one that

@@ -154,7 +154,10 @@ if (app.Environment.IsDevelopment()) {
 }
 
 app.UseCors("AllowAll");
-app.UseWebSockets();
+// The client sends its own pings and gives up on a socket that stops answering, which is what
+// actually detects a half-open connection. This is the server's half of the same job: it drops a
+// socket whose path has gone rather than holding it and the presence entry that goes with it.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 
 app.UseAuthentication();
 app.UseAuthorization();

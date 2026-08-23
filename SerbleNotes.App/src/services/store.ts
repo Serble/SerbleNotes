@@ -9,7 +9,7 @@ import {
   reparent,
   seal,
 } from '../core';
-import type { Note, NoteVersion, Vault } from '../types';
+import type { Note, NoteVersion, SyncEvent, Vault } from '../types';
 import { api, type NewVersion } from './api';
 import { randomId } from './ids';
 import { readVault, writeChanges } from './vaultCache';
@@ -197,6 +197,47 @@ export class VaultStore {
     // A note written before names existed is titled from its first line, which needs its body. They
     // are rare and legacy, so they are fetched in the background rather than held against the open.
     void this.loadUnnamedTitles();
+  }
+
+  /**
+   * Takes rows that arrived over the sync socket instead of being asked for.
+   *
+   * Returns whether this device is now certainly up to date. That is the whole subtlety here, and
+   * it is the cursor rule again from the other side: the cursor may only move to a point where
+   * *everything* below it has been seen. A pushed event proves one write happened, not that no
+   * other write was missed while the socket was away.
+   *
+   * The proof is contiguity. Every write reserves exactly one cursor value (`IVaultRepo.NextCursor`)
+   * and events go to every device, so an unbroken stream arrives with each cursor one higher than
+   * the last. If this event follows ours by exactly one, nothing can have happened in between and
+   * the cursor is safe to advance. Any other gap means something was missed, and the caller pulls.
+   *
+   * The rows are kept either way - they are real, and `mergeVersion` never lets a metadata-only row
+   * displace ciphertext we already have. Keeping them just means the pull that follows is answered
+   * from memory.
+   */
+  async absorb(event: SyncEvent): Promise<boolean> {
+    const contiguous = event.cursor === this.cursor + 1;
+
+    for (const version of event.versions) {
+      this.mergeVersion(version);
+    }
+    for (const note of event.notes) {
+      this.putNote(note);
+    }
+
+    if (contiguous) {
+      this.cursor = event.cursor;
+    }
+
+    await writeChanges(this.vault.id, {
+      notes: event.notes,
+      versions: event.versions.map((version) => this.versions.get(version.id) ?? version),
+      // As everywhere else: the cursor goes in only with rows that account for it.
+      ...(contiguous ? { cursor: this.cursor } : {}),
+    });
+
+    return contiguous;
   }
 
   /**
