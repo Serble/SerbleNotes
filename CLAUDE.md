@@ -76,6 +76,35 @@ diff against the parent, with periodic full snapshots so history replay stays ch
 Because the server can't read diffs, history pruning/GC decisions are driven by client-supplied
 metadata, not by inspecting content.
 
+### Reading a version
+
+A version opened from the history panel shows the *change* that save made, git-style: removed lines,
+added lines, and three lines of context round them. That is the default, because a version is a
+change and "what did this save do" is the question a history is opened to answer - the whole note
+rendered is what the editor is already showing. A switch on the version bar reads it the other way,
+and the choice is remembered on the device in `settings.ts` (`versionDiff`), because somebody
+reading back through a note wants the same reading every time.
+
+- **Nothing in the client diffs anything.** `make_diff` in the core produced the payload sitting in
+  the version already, and it is the only thing in this project allowed to say what changed;
+  `services/diff.ts` reads its unified diff back into lines a component can draw. A second differ in
+  TypeScript would be a second opinion, and the two would disagree the day one of them was updated.
+- **The diff is against the version's `parentId`,** materialised like any other. A merge has two
+  parents and the diff is against the first, which the panel says. A parent that cannot be rebuilt
+  is `null` rather than `''`: an empty base would draw the whole note as newly added, which is a
+  plausible wrong answer, and the panel falls back to the whole note and says why.
+- **The parser has tests** (`tests/diff.test.ts`, driven through the real `make_diff`) because its
+  failures are quiet - a hunk read one line short shows a save that did less than it did. Three
+  parts of diffy's format are exactly where that happens: **a hunk is read by counting** the lines
+  its header promises, so a note that itself contains `@@ -1 +1 @@` or a line starting with `-` is
+  content rather than structure; **a blank context line arrives with no leading space** at all
+  (`suppress_blank_empty`), so read as an unknown prefix it ends the hunk early; and **the
+  `\ No newline at end of file` marker can follow the last counted line**, which is the usual case
+  here because a note is whatever was typed and rarely ends with a newline.
+- **It is source text, not rendered markdown.** A rendered before-and-after shows two documents that
+  look almost the same and leaves the reader to spot the difference, which is the job the view
+  exists to do.
+
 ### Notes, names and folders
 
 A note has one name, and a `/` in it is a folder. `Work/Projects/Alpha` puts Alpha inside Projects
@@ -695,6 +724,26 @@ columns of a monospace grid and counts as one character - or as several, for an 
 joined code points, which `Intl.Segmenter` puts back together. Getting that wrong is not a rounding
 error, it is a table whose sides do not line up for anybody writing in a language nobody tested.
 
+**A table stops at the last line that is written as a row.** GFM says it runs to the first blank
+line or the start of another block, so a sentence typed under a table with no gap in between is a row
+of it - the whole sentence in the first column and every other column empty. The spec is the spec,
+but here it is worse than a rendering oddity: the table is *drawn*, so the next keystroke in any cell
+writes the whole thing back laid out and the sentence comes out as markdown with pipes round it. Text
+that was a paragraph a moment ago cannot quietly become part of a table. So a line with no unescaped
+pipe in it ends the table, and is then parsed as whatever it is - nothing is dropped either way, the
+only question is which block the line belongs to. A row with *fewer* cells than the header is still a
+row; the rule is about pipes, not about counting them.
+
+Three places have to agree about it, so `looksLikeRow` and `startsTable` in `tableFormat.ts` are the
+one definition. The editor's parser is told directly, as an `endLeaf` in `markdownLanguage.ts` -
+asked before the block's own parsers see the line, which is what finishes the paragraph where it
+stands. `MarkdownPreview` overrides marked's `table` tokenizer to hand the real one a source cut to
+`tableExtent`, rather than rewriting the note as text: by the time a block tokenizer is called marked
+has already taken off whatever the block sits inside - the `>` of a quote, the indent of a list item -
+and put fenced code out of reach, and a text pass would have to work all of that out again. Both are
+tested against the same documents in `tests/tableExtent.test.ts`, because a note that read as two
+different things depending on where it was opened would be its own bug.
+
 **Laying out a laid-out table has to change nothing.** Every edit to a drawn table writes the whole
 thing back, so a layout that was not a fixed point would leave a note permanently unsaved. There is a
 test.
@@ -1086,7 +1135,8 @@ coming back to 0.25 s. Export is the one operation that still needs every note, 
 fetches them all (six at a time) with progress before it will build an archive.
 
 `services/settings.ts` is the client's own configuration - one JSON object under one key, currently
-holding which note was last open in each vault and which vault was open when the app was last used.
+holding which note was last open in each vault, which vault was open when the app was last used, and
+whether an older version is read as its changes or as the whole note.
 New per-device preferences belong there rather than in a key of their own; `layout.ts` and the folder
 state in `store.ts` predate it.
 
@@ -1236,8 +1286,9 @@ Two rules that matter more than coverage numbers:
 
 `SerbleNotes.App/tests/` holds the few pieces of the client that can be wrong rather than broken -
 today the markdown table layout, which rewrites the user's text and whose bugs save a table with a
-cell missing rather than failing, and the CSS scoping in `cssScope.ts`, whose bug is a note styling
-the app with nothing on the screen to say so. Everything else in the client is a button that either
+cell missing rather than failing, the CSS scoping in `cssScope.ts`, whose bug is a note styling
+the app with nothing on the screen to say so, and the diff reader in `diff.ts`, whose bug is a
+version shown as having changed less than it did. Everything else in the client is a button that either
 works or visibly does not.
 
 The DOM half of drawing a note - the sanitiser, the CSS parse, the decorations `htmlView` builds -

@@ -34,11 +34,21 @@ export interface Settings {
    * going back to it is a deliberate act, and it is the way to say "not this one next time".
    */
   lastVault: string | null;
+
+  /**
+   * Whether an older version opened from the history panel is shown as the changes that save made,
+   * rather than as the whole note. On by default: a version is a *change*, and "what did this save
+   * do" is the question a history is opened to answer - the whole note is the thing the editor is
+   * already showing. The other reading is one press away and is remembered, because somebody
+   * reading back through a note wants it every time.
+   */
+  versionDiff: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   lastNote: {},
   lastVault: null,
+  versionDiff: true,
 };
 
 /**
@@ -63,7 +73,10 @@ function clean(stored: Partial<Settings>): Settings {
   const lastVault =
     typeof stored.lastVault === 'string' && stored.lastVault !== '' ? stored.lastVault : null;
 
-  return { lastNote, lastVault };
+  const versionDiff =
+    typeof stored.versionDiff === 'boolean' ? stored.versionDiff : DEFAULT_SETTINGS.versionDiff;
+
+  return { lastNote, lastVault, versionDiff };
 }
 
 export function readSettings(): Settings {
@@ -149,4 +162,15 @@ export function forgetVault(vaultId: string): void {
   const next = { ...lastNote };
   delete next[vaultId];
   setSetting('lastNote', next);
+}
+
+/** How a version opened from the history panel is shown: its changes, or the whole note. */
+export function showVersionDiff(): boolean {
+  return getSetting('versionDiff');
+}
+
+export function rememberVersionDiff(diff: boolean): void {
+  if (getSetting('versionDiff') !== diff) {
+    setSetting('versionDiff', diff);
+  }
 }

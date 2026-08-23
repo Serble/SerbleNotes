@@ -19,6 +19,7 @@ import {
 } from '@lezer/markdown';
 import { tags } from '@lezer/highlight';
 import { codeLanguages } from './codeLanguages';
+import { looksLikeRow, startsTable } from './tableFormat';
 
 /**
  * The markdown parser the editor runs on, assembled here rather than taken from
@@ -116,6 +117,54 @@ const Tasks: MarkdownConfig = {
   ],
 };
 
+/**
+ * A table stops at the last line that is written as a row.
+ *
+ * GFM says a table runs until a blank line or the start of another block, so a sentence typed under
+ * one with no gap in between is a row of that table - the whole sentence squeezed into the first
+ * column, and every column of the row after it empty. The spec is the spec, but nobody typing under
+ * a table means that, and here it is worse than a rendering oddity: the table is *drawn*, so the
+ * next keystroke in any cell writes the whole thing back laid out, and the sentence is left as a
+ * row of markdown with pipes round it. Text that was a paragraph a moment ago cannot quietly become
+ * part of a table.
+ *
+ * So a line with no unescaped pipe in it ends the table instead. `endLeaf` is how the parser is
+ * told: it is asked before the block's own parsers see the line, and answering yes finishes the
+ * paragraph where it stands - the table covers exactly the rows above, and the line goes on to be
+ * parsed as whatever it is. Nothing is dropped either way; the only question is which block the
+ * line belongs to.
+ *
+ * The check is ordered so that the common case is one scan of the line being offered: a line that
+ * is a row cannot end anything, and only when it is not one is there any point asking whether the
+ * block above it is a table.
+ */
+const TableRows: MarkdownConfig = {
+  parseBlock: [
+    {
+      name: 'TableRows',
+      endLeaf(_, line, leaf) {
+        if (looksLikeRow(line.text.slice(line.basePos))) {
+          return false;
+        }
+
+        // The first two lines of the block, without splitting the whole of it on every line: this
+        // runs for every line of every paragraph in the note.
+        const firstBreak = leaf.content.indexOf('\n');
+        if (firstBreak < 0) {
+          return false;
+        }
+        const secondBreak = leaf.content.indexOf('\n', firstBreak + 1);
+
+        return startsTable(
+          leaf.content.slice(0, firstBreak),
+          leaf.content.slice(firstBreak + 1, secondBreak < 0 ? leaf.content.length : secondBreak),
+        );
+      },
+      after: 'Table',
+    },
+  ],
+};
+
 const markdownFacet = defineLanguageFacet({
   commentTokens: { block: { open: '<!--', close: '-->' } },
 });
@@ -142,12 +191,14 @@ function codeParser(info: string) {
   return ParseContext.getSkippingParser(found.load());
 }
 
-// GFM taken apart rather than used whole: it is Table, TaskList, Strikethrough and Autolink, and
-// the task lists here are the relaxed ones above. Superscript and Subscript are the `x^2^` and
-// `H~2~O` of markdownguide.org's extended syntax, and ship with the same package - the styles they
-// get are the ones `<sup>` and `<sub>` already use, so a note can write either.
+// GFM taken apart rather than used whole: it is Table, TaskList, Strikethrough and Autolink, with
+// the task lists here relaxed as above and `TableRows` deciding where a table stops. Superscript and
+// Subscript are the `x^2^` and `H~2~O` of markdownguide.org's extended syntax, and ship with the
+// same package - the styles they get are the ones `<sup>` and `<sub>` already use, so a note can
+// write either.
 const parser = baseParser.configure([
   Table,
+  TableRows,
   Tasks,
   Strikethrough,
   Autolink,

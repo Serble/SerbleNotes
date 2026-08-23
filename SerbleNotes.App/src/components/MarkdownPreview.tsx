@@ -1,8 +1,9 @@
-import { marked } from 'marked';
+import { Tokenizer, marked } from 'marked';
 import { findConflicts } from './conflicts';
 import { useEffect, useMemo, useRef } from 'react';
 import { copyText } from '../services/clipboard';
 import { bindLinks, cssIn, sanitiseHtml, scopeCss } from './noteHtml';
+import { tableExtent } from './tableFormat';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -22,6 +23,33 @@ marked.setOptions({ breaks: true, gfm: true });
 marked.use({
   renderer: {
     checkbox: ({ checked }) => `<span class="md-task${checked ? ' md-task-done' : ''}"></span>`,
+  },
+});
+
+/**
+ * A table stops at the last line that is written as a row.
+ *
+ * GFM says a table runs to the first blank line or the start of another block, so a sentence typed
+ * under one with no gap in between is a row of it - the whole sentence in the first column and every
+ * other column empty. The editor's parser is told otherwise (`markdownLanguage.ts`, and the reason
+ * is there); this is the same rule for the one renderer this app does not own, so a note read in the
+ * history panel is the document the editor was showing rather than one with an extra row in it.
+ *
+ * It is done by handing the real tokenizer a shortened source rather than by rewriting the note,
+ * because by the time a block tokenizer is called marked has already taken off whatever the block
+ * sits inside - the `>` of a quote, the indent of a list item - and put fenced code out of reach. A
+ * text pass over the whole note would have to work all of that out again, and would get it wrong for
+ * exactly the notes that are hardest to check. `raw` is what the lexer advances by, so the lines
+ * left behind are read next as whatever they are.
+ */
+marked.use({
+  tokenizer: {
+    table(src) {
+      const extent = tableExtent(src);
+      return extent > 0 && extent < src.length
+        ? Tokenizer.prototype.table.call(this, src.slice(0, extent))
+        : false;
+    },
   },
 });
 

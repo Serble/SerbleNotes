@@ -129,15 +129,13 @@ function padding(text: string, width: number): number {
 /* ------------------------------------------------------------------ reading a table */
 
 /**
- * Where each cell of a row sits in the line, as offsets into the line itself.
- *
- * The whole of the cell is included - the spaces markdown will trim off as well as the text - so
- * this can be used both to read the cells out and to work out where the cursor is inside one.
+ * Every `|` in the line that divides one cell from the next.
  *
  * A `|` preceded by a backslash is a pipe in someone's prose, not a column boundary, which is the
- * only escape markdown tables have.
+ * only escape markdown tables have - so this is the one place that rule is written down, and both
+ * "where do the cells begin" and "is this line a row at all" are asked of it.
  */
-export function cellRanges(line: string): { from: number; to: number }[] {
+function pipesIn(line: string): number[] {
   const bounds: number[] = [];
 
   for (let at = 0; at < line.length; at += 1) {
@@ -149,6 +147,30 @@ export function cellRanges(line: string): { from: number; to: number }[] {
       bounds.push(at);
     }
   }
+
+  return bounds;
+}
+
+/**
+ * Whether a line is written as a table row at all.
+ *
+ * A row is cells separated by pipes, so a line with no unescaped pipe in it is prose - which is the
+ * whole of the rule that stops a table swallowing the paragraph underneath it. It says nothing about
+ * how many cells the line has: a row with fewer than the header is ordinary markdown and is padded
+ * out when the table is read, and one with more widens the header rather than losing a cell.
+ */
+export function looksLikeRow(line: string): boolean {
+  return pipesIn(line).length > 0;
+}
+
+/**
+ * Where each cell of a row sits in the line, as offsets into the line itself.
+ *
+ * The whole of the cell is included - the spaces markdown will trim off as well as the text - so
+ * this can be used both to read the cells out and to work out where the cursor is inside one.
+ */
+export function cellRanges(line: string): { from: number; to: number }[] {
+  const bounds = pipesIn(line);
 
   if (bounds.length === 0) {
     return [{ from: 0, to: line.length }];
@@ -201,6 +223,45 @@ function alignOf(cell: string): Align {
 export function isDelimiterRow(line: string): boolean {
   const cells = splitRow(line);
   return cells.length > 0 && cells.every((cell) => DELIMITER_CELL.test(cell));
+}
+
+/**
+ * Whether these two lines open a table.
+ *
+ * Both have to be rows - a `---` with no pipe in it under a line of prose is a setext heading, and
+ * reading it as a one-column table would turn every underlined title in a note into one - and they
+ * have to agree on how many columns there are, which is the rule GFM starts a table by.
+ */
+export function startsTable(header: string, delimiter: string): boolean {
+  return (
+    looksLikeRow(header) &&
+    looksLikeRow(delimiter) &&
+    isDelimiterRow(delimiter) &&
+    splitRow(header).length === splitRow(delimiter).length
+  );
+}
+
+/**
+ * How much of `source` a table starting on its first line covers, in characters.
+ *
+ * Zero when it does not start with one. Otherwise the header, the delimiter row, and every line
+ * after them that is written as a row - stopping at the first that is not, which is the rule the
+ * editor's parser is given directly in `markdownLanguage.ts`.
+ */
+export function tableExtent(source: string): number {
+  const lines = source.split('\n');
+  if (lines.length < 2 || !startsTable(lines[0], lines[1])) {
+    return 0;
+  }
+
+  let end = 2;
+  while (end < lines.length && lines[end].trim() !== '' && looksLikeRow(lines[end])) {
+    end += 1;
+  }
+
+  // The line breaks between the lines taken, and the one that ends the last of them if it has one.
+  const taken = lines.slice(0, end).join('\n');
+  return end < lines.length ? taken.length + 1 : taken.length;
 }
 
 function widen(row: string[], columns: number): string[] {

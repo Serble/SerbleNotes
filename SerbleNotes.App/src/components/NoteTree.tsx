@@ -37,6 +37,8 @@ interface NoteTreeProps extends TreeActions {
   /** A path to put straight into rename mode - how a just-created folder gets named. */
   renameTarget: string | null;
   onRenameTargetHandled: () => void;
+  /** Drops the filter, because a folder clicked in the results is a place to go rather than a hit. */
+  onClearFilter: () => void;
 }
 
 /**
@@ -138,6 +140,18 @@ export function useCollapsedFolders(vaultId: string): FolderCollapse {
   );
 }
 
+/**
+ * How long a folder jumped to from the filter stays marked. Long enough to find with the eye,
+ * short enough that it is gone before it can be mistaken for the selection.
+ */
+const FLASH_MS = 1600;
+
+/** Every folder above this one, outermost first - the ones that have to be open to see it. */
+function ancestorsOf(path: string): string[] {
+  const parts = path.split('/');
+  return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'));
+}
+
 /** Keeps only the folders whose name, or a note inside them, matches what was typed. */
 function filterTree(nodes: TreeNode[], needle: string): TreeNode[] {
   const lower = needle.toLowerCase();
@@ -163,6 +177,11 @@ export function NoteTree(props: NoteTreeProps) {
   const [menu, setMenu] = useState<MenuState | null>(null);
   // '' is the top level, which is a real drop target; null means nothing is being hovered.
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // The folder just jumped to from the filter, marked until the eye has had a chance to find it.
+  const [flash, setFlash] = useState<string | null>(null);
+  const flashTimer = useRef<number>();
+
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
 
   // A folder that was just created arrives already in rename mode, so it can be named by typing
   // rather than by hunting for a rename command.
@@ -182,6 +201,26 @@ export function NoteTree(props: NoteTreeProps) {
   );
 
   const { toggle, reveal } = props.collapse;
+  const { onClearFilter } = props;
+
+  /**
+   * A folder clicked in a filtered tree is a destination, not a twisty. The rows around it are only
+   * the ones that matched, so opening it there shows a folder with most of its contents missing and
+   * leaves the person no nearer to where the folder actually is. The filter is dropped instead,
+   * every folder above it opened, and the row itself focused and marked - without that last part
+   * the tree it lands in is the whole vault again and the folder is somewhere in it.
+   */
+  const goTo = (path: string) => {
+    onClearFilter();
+    for (const ancestor of ancestorsOf(path)) {
+      reveal(ancestor);
+    }
+    reveal(path);
+
+    setFlash(path);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(null), FLASH_MS);
+  };
 
   const drop = (targetFolder: string) => {
     const item = dragItem;
@@ -331,7 +370,8 @@ export function NoteTree(props: NoteTreeProps) {
             depth={depth}
             open={open}
             highlighted={dropTarget === node.path}
-            onToggle={() => toggle(node.path)}
+            flash={flash === node.path}
+            onToggle={() => (filtering ? goTo(node.path) : toggle(node.path))}
             onRename={() => setRenaming(node.path)}
             onNewNote={() => props.onNewNote(node.path)}
             onContextMenu={(event) => openMenu(event, folderMenu(node))}
@@ -400,6 +440,8 @@ interface FolderRowProps {
   depth: number;
   open: boolean;
   highlighted: boolean;
+  /** Just jumped to from the filter: take the caret and say which row it was. */
+  flash: boolean;
   onToggle: () => void;
   onRename: () => void;
   onNewNote: () => void;
@@ -413,10 +455,25 @@ interface FolderRowProps {
 
 function FolderRow(props: FolderRowProps) {
   const hoverTimer = useRef<number>();
+  const open = useRef<HTMLButtonElement>(null);
 
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
 
-  const className = ['tree-row', 'folder', props.highlighted ? 'drop-into' : ''].join(' ').trim();
+  // Focus rather than a scroll alone: it is the row's own control, so it comes with a focus ring,
+  // it is where the keyboard now is, and a folder found by filtering can be opened by pressing
+  // Enter. The scroll is asked for separately so it moves as little as it can.
+  const { flash } = props;
+  useEffect(() => {
+    if (!flash) {
+      return;
+    }
+    open.current?.focus({ preventScroll: true });
+    open.current?.scrollIntoView({ block: 'nearest' });
+  }, [flash]);
+
+  const className = ['tree-row', 'folder', props.highlighted ? 'drop-into' : '', flash ? 'flash' : '']
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div
@@ -461,7 +518,12 @@ function FolderRow(props: FolderRowProps) {
       }}
       onContextMenu={props.onContextMenu}
     >
-      <button className="tree-open" onClick={props.onToggle} onDoubleClick={props.onRename}>
+      <button
+        ref={open}
+        className="tree-open"
+        onClick={props.onToggle}
+        onDoubleClick={props.onRename}
+      >
         <span className="tree-twist">
           {props.open ? <ChevronDownIcon /> : <ChevronRightIcon />}
         </span>

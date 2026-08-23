@@ -27,6 +27,7 @@ import { ImportDialog } from "../components/ImportDialog";
 import { HistoryPanel } from "../components/HistoryPanel";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { MarkdownPreview } from "../components/MarkdownPreview";
+import { VersionDiff } from "../components/VersionDiff";
 import { MoveDialog } from "../components/MoveDialog";
 import { NoteDetails } from "../components/NoteDetails";
 import { NotePathBar } from "../components/NotePathBar";
@@ -50,7 +51,12 @@ import {
   unsaved,
   type EditorState,
 } from "../services/noteSync";
-import { lastNoteIn, rememberNote } from "../services/settings";
+import {
+  lastNoteIn,
+  rememberNote,
+  rememberVersionDiff,
+  showVersionDiff,
+} from "../services/settings";
 import { SyncSocket } from "../services/sync";
 import type { VaultStore } from "../services/store";
 import { storeFor } from "../services/stores";
@@ -282,7 +288,43 @@ function Workspace({
   const [previewVersion, setPreviewVersion] = useState<NoteVersion | null>(
     null,
   );
+
+  /**
+   * Whether an older version is read as the change it made or as the whole note. Remembered on the
+   * device rather than reset per note: it is how this person reads a history, not a fact about one.
+   */
+  const [asDiff, setAsDiff] = useState(showVersionDiff);
+  const chooseDiff = useCallback((diff: boolean) => {
+    setAsDiff(diff);
+    rememberVersionDiff(diff);
+  }, []);
+
+  /**
+   * The version being read and the one before it, which is what the diff is against.
+   *
+   * A version with no parent is the first, and diffing against nothing shows the note as it arrived
+   * - which is what that save did. A parent that cannot be rebuilt is null rather than an empty
+   * string: an empty base would draw the whole note as newly added, which is a plausible, wrong
+   * answer, and this file has a rule about those.
+   */
+  const previewTexts = useMemo(() => {
+    if (!previewVersion) {
+      return null;
+    }
+
+    let previous: string | null = null;
+    try {
+      previous = previewVersion.parentId
+        ? store.materialise(previewVersion.parentId)
+        : "";
+    } catch {
+      previous = null;
+    }
+
+    return { current: safeMaterialise(store, previewVersion.id), previous };
+  }, [previewVersion, store]);
   const [filter, setFilter] = useState("");
+  const filterInput = useRef<HTMLInputElement>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
 
@@ -834,12 +876,38 @@ function Workspace({
             <div className="notes-filter">
               <SearchIcon />
               <input
+                ref={filterInput}
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && filter !== "") {
+                    // Escape empties the field rather than reaching whatever else
+                    // is listening for it; the field is what has focus.
+                    event.stopPropagation();
+                    setFilter("");
+                  }
+                }}
                 placeholder="Filter"
                 aria-label="Filter notes"
                 spellCheck={false}
               />
+
+              {/* Only there when there is something to clear - a permanent X on an
+                  empty field is a control that does nothing. Clearing puts the caret
+                  back in the field, because the next thing anyone does is type. */}
+              {filter !== "" && (
+                <button
+                  className="icon"
+                  title="Clear filter"
+                  aria-label="Clear filter"
+                  onClick={() => {
+                    setFilter("");
+                    filterInput.current?.focus();
+                  }}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              )}
             </div>
 
             {loading && <p className="muted small">Loading...</p>}
@@ -849,6 +917,7 @@ function Workspace({
               nodes={tree}
               selectedId={selected}
               filter={filter}
+              onClearFilter={() => setFilter("")}
               renameTarget={renameTarget}
               onRenameTargetHandled={clearRenameTarget}
               onOpen={openNote}
@@ -932,6 +1001,29 @@ function Workspace({
                   </span>
                 </div>
                 <div className="row">
+                  {/* One control in two states, like the table's Text/Table button: a version is
+                      either the change it made or the note it left behind, and both readings are
+                      worth having. */}
+                  <div
+                    className="segmented"
+                    role="group"
+                    aria-label="How to read this version"
+                  >
+                    <button
+                      className={asDiff ? "ghost on" : "ghost"}
+                      aria-pressed={asDiff}
+                      onClick={() => chooseDiff(true)}
+                    >
+                      Changes
+                    </button>
+                    <button
+                      className={asDiff ? "ghost" : "ghost on"}
+                      aria-pressed={!asDiff}
+                      onClick={() => chooseDiff(false)}
+                    >
+                      Whole note
+                    </button>
+                  </div>
                   <button
                     className="ghost"
                     onClick={() => setPreviewVersion(null)}
@@ -947,9 +1039,33 @@ function Workspace({
                 </div>
               </div>
               <div className="version-body">
-                <MarkdownPreview
-                  text={safeMaterialise(store, previewVersion.id)}
-                />
+                {!asDiff || !previewTexts ? (
+                  <MarkdownPreview
+                    text={safeMaterialise(store, previewVersion.id)}
+                  />
+                ) : previewTexts.previous === null ? (
+                  <>
+                    <p className="muted small">
+                      The version before this one has not been downloaded, so
+                      there is nothing to compare against. This is the whole
+                      note.
+                    </p>
+                    <MarkdownPreview text={previewTexts.current} />
+                  </>
+                ) : (
+                  <>
+                    {previewVersion.mergeParentId && (
+                      <p className="muted small">
+                        This save merged two versions. The changes are shown
+                        against the one this device already had.
+                      </p>
+                    )}
+                    <VersionDiff
+                      previous={previewTexts.previous}
+                      current={previewTexts.current}
+                    />
+                  </>
+                )}
               </div>
             </div>
           ) : selected ? (

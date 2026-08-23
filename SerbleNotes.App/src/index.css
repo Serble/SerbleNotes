@@ -1051,6 +1051,97 @@ p.small, span.small, .small { font-size: 0.82rem; }
   padding: 1.25rem 1.5rem 2rem;
 }
 
+/*
+ * A pair of buttons that are one control in two states - the reading of a version, changes or whole
+ * note. They are joined into one box so they read as two halves of a choice rather than as two
+ * separate actions sitting next to each other.
+ */
+.segmented {
+  display: flex;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.segmented .ghost { border-radius: 0; }
+.segmented .ghost + .ghost { border-left: 1px solid var(--border-2); }
+
+/* ------------------------------------------------------------ version diffs */
+
+/*
+ * What one save did, drawn the way a diff is drawn anywhere else. Monospace, because these are the
+ * note's own lines rather than the note rendered - see components/VersionDiff.tsx.
+ *
+ * Added and removed are the only colour on the page here, and they are films over the surface
+ * rather than flat fills: the text on them is the note's, and it has to stay as readable as it is
+ * everywhere else in the app.
+ */
+.diff { font-family: var(--mono); font-size: 0.85rem; line-height: 1.55; }
+
+.diff-summary {
+  display: flex;
+  gap: 0.9rem;
+  font-family: var(--sans);
+  margin: 0 0 0.9rem;
+}
+.diff-count.added { color: var(--good); }
+.diff-count.removed { color: var(--danger); }
+
+.diff-hunk {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.diff-hunk + .diff-hunk { margin-top: 0.9rem; }
+
+.diff-hunk-head {
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  font: 600 0.75rem/1.4 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-line { display: flex; align-items: baseline; }
+
+/* The two gutters are the line's place in the old text and in the new one. They are hidden from
+   assistive software: a screen reader working through a diff wants the lines, not two numbers in
+   front of every one of them. */
+.diff-no {
+  flex: none;
+  width: 3.2em;
+  padding-right: 0.5rem;
+  text-align: right;
+  color: var(--faint);
+  user-select: none;
+}
+.diff-sign {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  color: var(--faint);
+  user-select: none;
+}
+
+/* The note's own text, so it wraps rather than scrolling the panel sideways - a rail is narrow and
+   a line of prose in a note is long. `anywhere` for the same reason a code block uses it: what
+   overflows is often one unbreakable token. */
+.diff-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 0.7rem;
+}
+
+.diff-add { background: color-mix(in srgb, var(--good) 12%, transparent); }
+.diff-add .diff-sign { color: var(--good); }
+.diff-remove { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.diff-remove .diff-sign { color: var(--danger); }
+.diff-context { color: var(--text-2); }
+
 /* ---------------------------------------------------------------- splitters */
 
 /*
@@ -1161,6 +1252,15 @@ body.resizing * { cursor: inherit; }
   border-color: var(--accent-fill);
   color: var(--muted);
 }
+/* The clear button sits inside the field's own border, so it takes no height of its own and no
+   space when there is nothing to clear. */
+.notes-filter .icon {
+  flex: 0 0 var(--control-sm);
+  width: var(--control-sm);
+  min-width: 0;
+  min-height: var(--control-sm);
+  margin-right: -0.35rem;
+}
 
 /* Grows to fill the sidebar so the empty space below the last row is still a drop target for the
    top level - dragging something out of every folder needs somewhere to aim at. */
@@ -1194,6 +1294,20 @@ body.resizing * { cursor: inherit; }
   outline: 1px solid var(--accent);
 }
 .tree-row.renaming { gap: 0.35rem; padding: 0 0.2rem; color: var(--text); }
+
+/* A folder jumped to from the filter. The tree it lands in is the whole vault again, so the row
+   says which one it was and then stops saying it - held any longer it reads as the selection. */
+.tree-row.flash {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  animation: tree-flash 1.6s ease-out forwards;
+}
+@keyframes tree-flash {
+  from { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+  to { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tree-row.flash { animation: none; }
+}
 
 .tree-open {
   flex: 1;
