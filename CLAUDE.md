@@ -276,6 +276,11 @@ Every value lives as a custom property at the top of `index.css`, and the CodeMi
     icon reappears the day someone wipes `gen/android`.
   - **The adaptive foreground is 46% of its canvas** and no larger. A launcher masks it to a circle
     about two thirds across, and a square mark any bigger has its corners cut off by that circle.
+- **Ctrl-S is swallowed** (`App.tsx`, a capturing window listener). The browser's answer to it is to
+  save the page as an HTML file, which here is the empty shell the client boots from - the note is
+  not in it. Nor is there anything for the key to mean: an edit is written 1.2s after it is typed, so
+  a note is already saved by the time anybody reaches for the shortcut. It is given no job rather
+  than a made-up one.
 - **Buttons are bare by default.** `button` is a label that lights up under the pointer; `.primary`
   is a filled slab and there is at most **one** on a screen, which is what makes it mean something.
   `.ghost` is the bare one, `.ghost.on` is a toggle that is currently on, `.icon` is a square.
@@ -870,14 +875,32 @@ component of the same name in `Icons.tsx`.
 the editor can open the same object: same looks, same ways out, same nudge back inside the window near
 an edge. Two menus that behaved slightly differently would be two menus to learn.
 
-`editorMenu.tsx` says what is in it - cut, copy and paste, then everything about the table the cursor
-or the edited cell is in, and "Insert table" when there is neither.
+`editorMenu.tsx` says what is in it - cut, copy, paste, "Select word" and "Select all", then
+everything about the table the cursor or the edited cell is in, and "Insert table" when there is
+neither.
 
 - **Cut and copy and paste are here because a note in a web view does not reliably have them.** Cut
   copies first and deletes only if that worked: a cut that could not reach the clipboard and deleted
   the text anyway is the one outcome here that loses something unrecoverable. Paste cannot fall back
   on `execCommand` the way copy can - reading the clipboard was removed from it deliberately - so when
   the browser refuses, it says so and points at Ctrl-V rather than doing nothing.
+- **The two selections are how a finger selects anything at all**, which is why they are not a
+  convenience: the long press that would drag out a selection is the one that opens this menu, so
+  without them a phone cannot get a word onto the clipboard. `selectText.ts` is both - "Select word"
+  from `state.wordAt`, "Select all" the document - and each says why when it cannot: no word under
+  the caret, an empty note. Nothing is left out of the menu for not applying.
+- **"The selection" is the cell's when a cell is being edited.** A drawn table's cells are editable
+  islands the editor's cursor is never inside, so cut, copy, paste and both selections asked the
+  document about text nobody was looking at - and paste landed wherever the cursor had last been
+  left, which could be pages away. `cellText.ts` is that half: what the cell says, what is selected
+  in it, and writing part of it back through `setCell` like every other change to a table. Two
+  things in it are not detail. It is all read **when the menu is built**, because pressing a menu
+  item takes the focus, which blurs the cell, which puts back what the cell draws in place of what
+  it says - the offsets survive that (the commit writes the same text back), the caret and the
+  element do not, so the element is looked up again. And a cell only counts while it actually holds
+  the caret: `tableState` remembers the last cell edited and is never told the cursor went back to
+  the note, so the page is asked instead - which works because a focused cell is exactly the case
+  where the editor itself does not have the focus.
 - **It opens on a long press as well as a right-click.** Android fires `contextmenu` on a long press
   and desktop fires it on a right-click; iOS fires neither, so there is a 500ms timer that abandons
   the moment the finger moves more than a few pixels - a drag is a scroll or a selection, and taking

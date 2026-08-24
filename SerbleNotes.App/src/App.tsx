@@ -67,6 +67,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Ctrl-S offers to save the page as an HTML file, which for this app is the empty shell the
+    // client boots from - the note is not in it, and would not be readable if it were. There is
+    // nothing for the keystroke to mean either: an edit is written 1.2s after it is typed, so a
+    // note is already saved by the time anybody reaches for it. So it is swallowed rather than
+    // given a job. Capturing, so it never reaches a text box or the editor's own keymap.
+    const swallowSave = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener('keydown', swallowSave, true);
+    return () => window.removeEventListener('keydown', swallowSave, true);
+  }, []);
+
+  useEffect(() => {
     onSessionChanged(sessionChanged);
 
     // The token has already been cleared by the time this fires; all that is left is to stop

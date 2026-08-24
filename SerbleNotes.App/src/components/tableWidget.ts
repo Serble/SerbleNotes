@@ -1,6 +1,6 @@
 import { EditorView, WidgetType } from '@codemirror/view';
 import { gripIcon, plusIcon, textIcon } from './domIcons';
-import { setActiveCell, setTextMode, takeFocusRequest } from './tableState';
+import { type ActiveCell, setActiveCell, setTextMode, takeFocusRequest } from './tableState';
 import {
   HEADER_ROW,
   type Align,
@@ -99,6 +99,19 @@ function alignClass(align: Align): string {
 
 function cellIn(root: ParentNode, row: number, column: number): HTMLElement | null {
   return root.querySelector<HTMLElement>(`.cm-td[data-row="${row}"][data-column="${column}"]`);
+}
+
+/**
+ * The element of a cell named by `tableState`, found rather than remembered.
+ *
+ * Anything that acts on a cell from outside the widget - the menu's selection commands - is run
+ * after the cell has lost focus to whatever was pressed, and a cell that loses focus is drawn again
+ * from its markdown. So the element is looked up when it is wanted, by the same three numbers that
+ * name the cell everywhere else, and a table that was redrawn in between is no obstacle.
+ */
+export function cellElement(view: EditorView, cell: ActiveCell): HTMLElement | null {
+  const root = view.dom.querySelector<HTMLElement>(`.cm-table[data-from="${cell.from}"]`);
+  return root ? cellIn(root, cell.row, cell.column) : null;
 }
 
 export class TableWidget extends WidgetType {

@@ -277,6 +277,30 @@ export const PasteIcon = ({ size = 16 }: IconProps) => (
   </svg>
 );
 
+/*
+ * The two selections: something marked off from what is round it. Both were drawn as a dashed
+ * marquee first, the way a selection being dragged out looks - and a dash at 16px is a row of blobs,
+ * because the gaps are smaller than the weight the whole set is drawn at. Marking only the corners
+ * says the same thing with strokes long enough to survive it. "Select word" brackets one word out of
+ * a line, and "select all" is the frame with nothing left outside it.
+ */
+export const SelectWordIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M8 7.5H5.5v9H8" />
+    <path d="M16 7.5h2.5v9H16" />
+    <path d="M9.5 12h5" />
+  </svg>
+);
+
+export const SelectAllIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M9 4.5H6.5a2 2 0 0 0-2 2V9" />
+    <path d="M15 4.5h2.5a2 2 0 0 1 2 2V9" />
+    <path d="M9 19.5H6.5a2 2 0 0 1-2-2V15" />
+    <path d="M15 19.5h2.5a2 2 0 0 0 2-2V15" />
+  </svg>
+);
+
 /* A table: the box, the rule under its header, and one division between columns. */
 export const TableIcon = ({ size = 16 }: IconProps) => (
   <svg {...base(size)} aria-hidden="true">

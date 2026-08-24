@@ -14,6 +14,8 @@ import {
   MoveUpIcon,
   PasteIcon,
   RowIcon,
+  SelectAllIcon,
+  SelectWordIcon,
   TableIcon,
   TextIcon,
   TrashIcon,
@@ -22,6 +24,8 @@ import { copyText, readText } from '../services/clipboard';
 import { columnCount } from './tableFormat';
 import { destinationAt, openLink } from './linkClicks';
 import { isTextMode, setTextMode } from './tableState';
+import { editedCell, replaceInCell, selectInCell } from './cellText';
+import { selectAll, selectWord } from './selectText';
 import {
   activeTable,
   addColumn,
@@ -38,10 +42,12 @@ import {
 /**
  * What the editor's own context menu offers.
  *
- * Two groups. The first is the three things a context menu anywhere offers, which the app has to
- * provide itself because a note in a web view has no menu of its own on every platform - and because
- * the clipboard is somewhere the note's plaintext goes, so it is worth this app being the thing that
- * puts it there rather than something it cannot see.
+ * Two groups. The first is what a context menu anywhere offers - cut, copy, paste, and the two ways
+ * of selecting text - which the app has to provide itself because a note in a web view has no menu
+ * of its own on every platform, and because the clipboard is somewhere the note's plaintext goes,
+ * so it is worth this app being the thing that puts it there rather than something it cannot see.
+ * The two selections are not a convenience on a touchscreen: the long press that would start a
+ * selection is the one that opens this menu, so without them a finger cannot select anything.
  *
  * The second is the table under the cursor, and it is only there when there is one. A table is the
  * one piece of markdown whose shape cannot sensibly be typed - adding a column means editing every
@@ -65,12 +71,28 @@ export function editorMenu(
   // different text. What was captured is only ever used to decide what the menu says.
   const selection = () => view.state.selection.main;
 
+  // What "the selection" is depends on where the text is. While a cell of a drawn table is being
+  // edited the document's own selection is wherever it was last left - somewhere the user cannot
+  // see, and possibly pages away - so everything below asks the cell first. Read now rather than
+  // when an item is pressed, because pressing one takes the focus off the cell. See `cellText.ts`.
+  const cell = editedCell(view);
+  const nothingSelected = cell ? cell.from === cell.to : range.empty;
+  const word = selectWord(view, cell);
+  const all = selectAll(view, cell);
+
+  const selected = (at: { from: number; to: number }) =>
+    cell ? cell.text.slice(cell.from, cell.to) : view.state.sliceDoc(at.from, at.to);
+
   const cut = async () => {
     const at = selection();
     // Copy first and delete only if it worked. A cut that could not reach the clipboard and deleted
     // the text anyway is the one outcome here that loses something the user cannot get back.
-    if (!(await copyText(view.state.sliceDoc(at.from, at.to)))) {
+    if (!(await copyText(selected(at)))) {
       notify('Could not put that on the clipboard, so nothing was cut. Try Ctrl-X instead.');
+      return;
+    }
+    if (cell) {
+      replaceInCell(view, cell, '');
       return;
     }
     view.dispatch({ changes: { from: at.from, to: at.to, insert: '' }, userEvent: 'delete.cut' });
@@ -79,8 +101,14 @@ export function editorMenu(
 
   const copy = async () => {
     const at = selection();
-    if (!(await copyText(view.state.sliceDoc(at.from, at.to)))) {
+    if (!(await copyText(selected(at)))) {
       notify('Could not put that on the clipboard. Try Ctrl-C instead.');
+    }
+    if (cell) {
+      // Put the selection back where it was: pressing the menu item took it, and text that visibly
+      // stopped being selected reads as nothing having happened.
+      selectInCell(view, cell.from, cell.to);
+      return;
     }
     view.focus();
   };
@@ -89,6 +117,10 @@ export function editorMenu(
     const text = await readText();
     if (text === null) {
       notify('This browser will not let the app read the clipboard. Ctrl-V still works.');
+      return;
+    }
+    if (cell) {
+      replaceInCell(view, cell, text);
       return;
     }
     const at = selection();
@@ -104,18 +136,39 @@ export function editorMenu(
     {
       label: 'Cut',
       icon: <CutIcon />,
-      disabled: range.empty,
-      hint: range.empty ? 'Select some text first' : undefined,
+      disabled: nothingSelected,
+      hint: nothingSelected ? 'Select some text first' : undefined,
       run: () => void cut(),
     },
     {
       label: 'Copy',
       icon: <CopyIcon />,
-      disabled: range.empty,
-      hint: range.empty ? 'Select some text first' : undefined,
+      disabled: nothingSelected,
+      hint: nothingSelected ? 'Select some text first' : undefined,
       run: () => void copy(),
     },
     { label: 'Paste', icon: <PasteIcon />, run: () => void paste() },
+    {
+      label: 'Select word',
+      icon: <SelectWordIcon />,
+      disabled: word === null,
+      hint: word === null ? 'There is no word here' : undefined,
+      run: () => word?.(),
+    },
+    {
+      label: 'Select all',
+      icon: <SelectAllIcon />,
+      disabled: all === null,
+      hint:
+        all === null
+          ? cell
+            ? 'This cell is empty'
+            : 'This note is empty'
+          : cell
+            ? 'Everything in this cell'
+            : undefined,
+      run: () => all?.(),
+    },
   ];
 
   // A link under the caret. Ctrl-click opens one on a keyboard; this is how a finger does, and it
