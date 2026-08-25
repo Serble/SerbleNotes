@@ -58,8 +58,9 @@ test('a vault survives being written out and read back', async () => {
 });
 
 test('a note called todo.md comes back as todo.md and not as todo', async () => {
-  // `.md` is added on the way out and taken off on the way in, so this file is `todo.md.md`. It
-  // looks wrong and it is the only mapping that is reversible - `todo` and `todo.md` are two notes.
+  // 'A' added to comments so IDE doesnt complain about tasks yet to complete
+  // `.md` is added on the way out and taken off on the way in, so this file is `tAodo.md.md`. It
+  // looks wrong and it is the only mapping that is reversible - `tAodo` and `tAodo.md` are two notes.
   await pc.createNote('todo', 'plain\n');
   await pc.createNote('todo.md', 'suffixed\n');
 
