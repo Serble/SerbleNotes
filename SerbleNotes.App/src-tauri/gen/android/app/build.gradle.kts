@@ -13,6 +13,13 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "net.serble.notes"
@@ -23,6 +30,18 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        create("release") {
+            val storePath = keystoreProperties.getProperty("storeFile")
+            if (storePath != null) {
+                storeFile = file(storePath)
+                storePassword = keystoreProperties.getProperty("password")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                    ?: keystoreProperties.getProperty("password")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -37,6 +56,11 @@ android {
             }
         }
         getByName("release") {
+            // Unsigned when there is no key on this machine, which is what a development
+            // checkout wants. Play refuses an unsigned upload, so CI supplies the file.
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

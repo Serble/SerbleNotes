@@ -1085,6 +1085,18 @@ custom scheme needs an `intent-filter` in `AndroidManifest.xml` instead, which `
 android-deeplink.py` adds. It is idempotent and `npm run android:init` runs it, so in the normal case
 it happens once and the result is committed with the rest of `gen/android`.
 
+**Signing is the second thing the template does not do**, and `scripts/android-signing.py` is its
+twin - same shape, same idempotence, run by the same `npm run android:init`, because both are edits
+to a generated project that a regeneration would otherwise take away silently. It adds a
+`signingConfigs` block to `app/build.gradle.kts` that reads `gen/android/keystore.properties`, which
+the template's own `.gitignore` already excludes - that is Tauri's documented convention rather than
+a path we picked, and it is what makes leaking the key by committing it hard.
+
+The config is applied only **when that file exists**. A checkout without a key still builds, because
+`npm run android:build -- --apk --debug` is how the app gets onto a phone during development and it
+has no business needing the release key. Without the guard Gradle fails a release build with an
+incomplete signing config, which names neither the file it wanted nor the fact that one was optional.
+
 **Wayland with NVIDIA's driver kills WebKitGTK, and the app works around it.** WebKitGTK hands its
 rendered frames to the compositor as DMABUF buffers, and that path is broken on the proprietary
 NVIDIA driver: no window ever appears and the process dies with `Gdk-Message: Error 71 (Protocol
@@ -1695,11 +1707,13 @@ cd SerbleNotes.App; npm run build:app           # -> SerbleNotes.App/dist, what 
 cd SerbleNotes.App; npm run desktop
 cd SerbleNotes.App; npm run desktop:build       # -> src-tauri/target/release/bundle
 
-# Android. `android:init` regenerates gen/android and re-adds the deep link filter; it is already
-# committed, so it is only needed after changing the identifier or wiping the directory.
+# Android. `android:init` regenerates gen/android and re-adds the deep link filter and the signing
+# config; it is already committed, so it is only needed after changing the identifier or wiping the
+# directory.
 cd SerbleNotes.App; npm run android:init
 cd SerbleNotes.App; npm run android             # runs on a connected device or emulator
 cd SerbleNotes.App; npm run android:build -- --apk --debug
+cd SerbleNotes.App; npm run android:build -- --aab --apk   # signed, if keystore.properties exists
 
 # Production shape: one command builds the core, the client and the backend together.
 dotnet publish SerbleNotes.Backend -c Release -o out
@@ -1737,6 +1751,64 @@ say so:
   `VITE_API_BASE_URL` set as a repository variable, because a packaged app is not served by the
   backend and has nowhere else to look for it. The OAuth client id needs nothing here - it comes
   from that server.
+
+### Releasing to Google Play
+
+`.github/workflows/clients.yml` signs the Android build and uploads it. Pushing a `v*` tag builds
+every client and publishes the AAB to the **internal track**; `workflow_dispatch` builds without
+publishing unless the `publish` box is ticked, and then to whichever track was chosen.
+
+**A tag goes no further than internal, deliberately.** Promoting to production means choosing a
+rollout percentage and writing release notes in front of the thing being released, and that is a
+decision somebody makes in the Play Console rather than one `git push --tags` makes on their behalf.
+Widening this would be one word in the workflow, and it is the word left unwritten.
+
+**Five secrets, and the workflow still builds without them.** `HAS_KEYSTORE` and `HAS_PLAY_KEY` are
+computed once at the top of the job, because the `secrets` context cannot be read from an `if`; with
+neither set the job falls back to the debug APK it produced before any of this existed, so a fork is
+not a workflow that fails.
+
+| Secret | What |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | The upload keystore, `base64 -w0` of the `.jks`. |
+| `ANDROID_KEYSTORE_PASSWORD` | Its store password. |
+| `ANDROID_KEY_ALIAS` | The key's alias inside it. |
+| `ANDROID_KEY_PASSWORD` | Optional, and normally unset. A modern keytool makes a PKCS12 keystore, which cannot hold a key password different from the store password - it warns and ignores `-keypass` if you try. Set this only for an older JKS keystore that really has one. |
+| `PLAY_SERVICE_ACCOUNT_JSON` | The whole JSON of a Google Cloud service account with the Play Developer API enabled and access granted in the Play Console. |
+
+Making the key, once, and then keeping it somewhere that is not this repository:
+
+```fish
+keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+base64 -w0 upload-keystore.jks    # this is what goes in the secret
+```
+
+**Losing that key used to mean losing the app.** It does not now, as long as Play App Signing is on:
+Play holds the real app signing key and this one is only an *upload* key, which Google can reset for
+you. Turn it on when the app is first created, or this file is telling you something that is not
+true of your app.
+
+Four things about this that are not obvious and each cost a release to find out:
+
+- **The first upload cannot be done by the API.** Google Play will not accept an AAB over the API for
+  a package it has never seen, so the very first build has to be uploaded by hand in the Play Console
+  to create the app. Everything after that is automatic. A workflow that fails on its first ever run
+  with a 404 about the package name is this, and nothing is wrong with the credentials.
+- **`versionCode` comes from the app version and Play never forgets one.** Tauri derives it from
+  `tauri.conf.json` as `major * 1000000 + minor * 1000 + patch` - 0.1.0 is 1000 - and Play refuses an
+  upload carrying a code it has already seen, permanently, including for a build that was rejected or
+  deleted. So the version has to be bumped before every release, and a re-run of the same tag cannot
+  publish. The workflow checks the tag against `tauri.conf.json` **before it compiles anything**,
+  because the alternative is finding out after the four-architecture build has run.
+- **The AAB is what Play takes; the APK is for people who install it themselves.** Both come out of
+  one `tauri android build --aab --apk`, which matters because the Rust core is compiled for four
+  architectures and doing that twice is most of the job's runtime.
+- **The mapping file is uploaded with it.** The release build is minified, so without
+  `mapping/universalRelease/mapping.txt` every crash report from a real phone is a stack of
+  obfuscated names.
+
+The key is written into the workspace and shredded in a step that runs `always()`, so a failed build
+does not leave it on a runner that is not ours.
 
 ## Working agreements
 

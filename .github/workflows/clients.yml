@@ -9,10 +9,29 @@ name: Clients
 #
 # VITE_API_BASE_URL has to be set as a repository variable: a packaged app is not served by the
 # backend, so it has nowhere to look for it. The Serble application id comes from that server once
-# the app can reach it, so there is nothing else to configure here.
+# the app can reach it, so there is nothing else to configure for a build.
+#
+# Publishing to Google Play needs four secrets for the signing key and one for the API, all listed
+# under "Releasing to Google Play" in CLAUDE.md. Without them this workflow still builds - it falls
+# back to the debug APK it built before there was a key - so a fork, or a clone with no secrets set,
+# is not a workflow that fails.
+#
+# A tag publishes to the internal track and no further. Promoting a build to production stays a
+# decision somebody makes in the Play Console, in front of the release notes and the rollout
+# percentage, rather than something a `git push --tags` does on their behalf.
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to Google Play as well as building
+        type: boolean
+        default: false
+      track:
+        description: Which track to publish to (ignored unless publishing)
+        type: choice
+        options: [internal, alpha, beta, production]
+        default: internal
   push:
     tags: ['v*']
 
@@ -85,6 +104,13 @@ jobs:
     name: Android
     runs-on: ubuntu-latest
 
+    # The `secrets` context cannot be read from an `if`, so whether each half of the release is
+    # configured is decided once, here, and the steps below test the result. Neither value is the
+    # secret itself.
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY_KEY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -118,9 +144,70 @@ jobs:
         working-directory: SerbleNotes.App
         run: npm ci
 
-      # The generated project is committed, so this only fills in what the template leaves out of
-      # version control - the signing config and the local SDK paths.
-      - name: Build
+      # Android's versionCode is derived from the app version by Tauri, and Play refuses an upload
+      # carrying a versionCode it has already seen. So a tag that does not match the version in
+      # tauri.conf.json either publishes a build named after the wrong release or is rejected an
+      # hour later by the API - both of which are worth catching here, before anything is compiled.
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: SerbleNotes.App/src-tauri
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(python3 -c "import json; print(json.load(open('tauri.conf.json'))['version'])")
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME is version $tagged, but tauri.conf.json says $declared."
+            echo "::error::Bump tauri.conf.json to $tagged and retag, or tag v$declared instead."
+            exit 1
+          fi
+          echo "Releasing $declared (Android versionCode is derived from it)."
+
+      # Written where the template's own .gitignore already expects a key, so nothing here can be
+      # committed by accident. The file is Java's .properties format, in which a backslash escapes
+      # the character after it - so one in a password would be silently eaten and the build would
+      # fail with nothing worse than "wrong password". Doubling them is what keeps that honest.
+      - name: Write the signing key
+        if: env.HAS_KEYSTORE == 'true'
+        working-directory: SerbleNotes.App/src-tauri/gen/android
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE" | base64 --decode > upload-keystore.jks
+          if [ ! -s upload-keystore.jks ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 did not decode to anything. Re-run base64 -w0 on the .jks."
+            exit 1
+          fi
+          {
+            printf 'storeFile=%s\n' "$PWD/upload-keystore.jks"
+            printf 'password=%s\n' "${STORE_PASSWORD//\\/\\\\}"
+            printf 'keyAlias=%s\n' "${KEY_ALIAS//\\/\\\\}"
+            # Omitted rather than written empty when the secret is unset: the Gradle config falls
+            # back to the store password only when the property is *absent*, and a modern keytool
+            # cannot give a PKCS12 keystore a separate key password anyway - it says so and ignores
+            # the request. An empty line here would be used as the password and fail the build.
+            if [ -n "$KEY_PASSWORD" ]; then
+              printf 'keyPassword=%s\n' "${KEY_PASSWORD//\\/\\\\}"
+            fi
+          } > keystore.properties
+
+      # An AAB is what Play takes; the APK is for people who install it themselves, and is the same
+      # build signed the same way. Both come out of one invocation, which matters because the Rust
+      # core is compiled for four architectures and doing that twice is most of the job's runtime.
+      - name: Build a signed release
+        if: env.HAS_KEYSTORE == 'true'
+        working-directory: SerbleNotes.App
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: npx tauri android build --aab --apk
+
+      # No key configured, so a release build would come out unsigned - which Play refuses and a
+      # phone will not install. A debug APK is the thing that is actually usable in that situation,
+      # and it is what this workflow produced before any of this existed.
+      - name: Build a debug APK
+        if: env.HAS_KEYSTORE != 'true'
         working-directory: SerbleNotes.App
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
@@ -129,6 +216,30 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: SerbleNotes.App/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: android
+          path: |
+            SerbleNotes.App/src-tauri/gen/android/app/build/outputs/**/*.apk
+            SerbleNotes.App/src-tauri/gen/android/app/build/outputs/**/*.aab
           if-no-files-found: error
+
+      # The key never leaves the runner, but the runner is not ours and the build is over: there is
+      # nothing left that needs it, so there is no reason for it to still be on disk.
+      - name: Shred the signing key
+        if: always() && env.HAS_KEYSTORE == 'true'
+        working-directory: SerbleNotes.App/src-tauri/gen/android
+        run: rm -f upload-keystore.jks keystore.properties
+
+      # The mapping file goes up with it because the release build is minified: without it every
+      # crash report from a real phone is a stack of obfuscated names.
+      - name: Publish to Google Play
+        if: >-
+          env.HAS_KEYSTORE == 'true' && env.HAS_PLAY_KEY == 'true'
+          && (github.event_name == 'push' || inputs.publish)
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: net.serble.notes
+          releaseFiles: SerbleNotes.App/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
+          mappingFile: SerbleNotes.App/src-tauri/gen/android/app/build/outputs/mapping/universalRelease/mapping.txt
+          track: ${{ github.event_name == 'push' && 'internal' || inputs.track }}
+          status: completed
