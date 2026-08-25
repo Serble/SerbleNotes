@@ -47,13 +47,18 @@ jobs:
       # webkit2gtk is the webview, libsoup is its HTTP stack, and librsvg is what the AppImage
       # bundler renders the icon with. Ubuntu 22.04 rather than latest because the glibc an AppImage
       # is built against is the oldest one it will run on.
+      #
+      # The tray icon library is libayatana-appindicator3-dev and only that one. Tauri v1's
+      # dependency list named libappindicator3-dev, the two Conflict: with each other in apt, and
+      # asking for both fails the whole install with "you have held broken packages" - which reads
+      # like a broken runner rather than a line naming two versions of one thing.
       - name: Linux build dependencies
         if: matrix.name == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev \
-            libappindicator3-dev librsvg2-dev patchelf build-essential curl wget file \
-            libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+            libayatana-appindicator3-dev librsvg2-dev patchelf build-essential \
+            curl wget file libssl-dev libgtk-3-dev
 
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
