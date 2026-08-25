@@ -1,9 +1,32 @@
 import { api, clearToken, setToken } from './api';
 import { isNative, redirectUri } from './platform';
 
-const SERBLE_APP_ID = import.meta.env.VITE_SERBLE_APP_ID as string | undefined;
 const SERBLE_OAUTH_URL = 'https://serble.net/oauth/authorize';
 const STATE_KEY = 'serblenotes.oauthState';
+
+/**
+ * The Serble application id, asked of the server rather than compiled in.
+ *
+ * The backend already had it - the token exchange it does sends the same id, paired with the secret
+ * only it holds - so building it into the client as well meant one value in two places, and a
+ * deployment pointed at a different Serble app was two changes rather than one. It is not a secret:
+ * it travels in the query string of every sign-in.
+ *
+ * Remembered for the session, because a native client can come back to the sign-in screen without
+ * reloading. A failed request is deliberately not remembered - it is usually a connection that was
+ * not there yet, and the next press of the button should try again rather than repeat the error.
+ */
+let appIdRequest: Promise<string> | null = null;
+
+async function serbleAppId(): Promise<string> {
+  appIdRequest ??= api.config().then((config) => config.serbleAppId);
+  try {
+    return await appIdRequest;
+  } catch (e) {
+    appIdRequest = null;
+    throw e;
+  }
+}
 
 /**
  * Serble refuses a state that contains anything but letters and digits, so this is hex rather than a
@@ -24,15 +47,16 @@ function newState(): string {
  * rather than a webview the app controls, is also the point: the app never sees the Serble password.
  */
 export async function beginLogin(): Promise<void> {
-  if (!SERBLE_APP_ID) {
-    throw new Error('VITE_SERBLE_APP_ID is not configured.');
+  const appId = await serbleAppId();
+  if (!appId) {
+    throw new Error('This server has no Serble application id configured, so there is nothing to sign in to.');
   }
 
   const state = newState();
   sessionStorage.setItem(STATE_KEY, state);
 
   const params = new URLSearchParams({
-    client_id: SERBLE_APP_ID,
+    client_id: appId,
     redirect_uri: redirectUri(),
     response_type: 'token',
     scope: 'user_info',

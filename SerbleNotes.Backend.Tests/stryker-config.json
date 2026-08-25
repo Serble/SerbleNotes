@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-net/master/src/Stryker.Core/Stryker.Core/Schemas/stryker-config.json",
+  "stryker-config": {
+    "project": "SerbleNotes.Backend.csproj",
+    "test-projects": ["../SerbleNotes.Backend.Tests/SerbleNotes.Backend.Tests.csproj"],
+    "reporters": ["progress", "json", "cleartext"],
+    "mutate": [
+      "Controllers/**/*.cs",
+      "Services/**/*.cs",
+      "Helpers/**/*.cs",
+      "Schema/**/*.cs",
+      "Database/Schema/**/*.cs",
+      "!Services/Impl/SerbleApiClient.cs",
+      "!Controllers/AccountController.cs",
+      "!Controllers/SyncController.cs"
+    ],
+    "thresholds": { "high": 85, "low": 70, "break": 0 },
+    "concurrency": 4
+  }
+}

@@ -675,7 +675,11 @@ test('every version of a forked history is still readable from a fresh device', 
 
   const fresh = new Device(newVault(), key, 'fresh');
   await fresh.pull();
-  await fresh.ensureNote(note.id);
+
+  // Opening a note now brings only the chain that rebuilds its current text, so a test that reads
+  // the whole history has to ask for the whole history - as the version panel does when a version
+  // is picked out of it.
+  await fresh.ensureHistory(note.id);
 
   for (const version of fresh.store.historyOf(note.id)) {
     assert.doesNotThrow(() => fresh.store.materialise(version.id), `version ${version.id}`);

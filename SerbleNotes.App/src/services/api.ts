@@ -2,6 +2,7 @@ import { randomId } from './ids';
 import { apiUrl } from './platform';
 import type {
   ChangesResponse,
+  ClientConfig,
   Note,
   NoteVersion,
   NotesUser,
@@ -140,6 +141,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  /**
+   * The settings the sign-in screen needs, which the client is not built with. Anonymous, so it is
+   * the one call that works before there is a token.
+   */
+  config: () => request<ClientConfig>('/config'),
+
   authenticate: (code: string) =>
     request<{ accessToken: string }>('/account', {
       method: 'POST',
@@ -180,7 +187,16 @@ export const api = {
     request<ChangesResponse>(`/vaults/${vaultId}/changes?since=${since}&bodies=${bodies}`),
 
   /** Every version of one note, ciphertext included. */
+  /**
+   * A note's whole version history. Only the fallback for a chain that cannot be worked out locally
+   * - the ordinary path is `noteVersionsByIds`, which fetches the ten or so versions a note actually
+   * needs to open.
+   */
   noteVersions: (noteId: string) => request<NoteVersion[]>(`/notes/${noteId}/versions`),
+
+  /** Named versions of one note, for a client that already knows which ciphertext it is missing. */
+  noteVersionsByIds: (noteId: string, ids: string[]) =>
+    request<NoteVersion[]>(`/notes/${noteId}/versions?ids=${ids.map(encodeURIComponent).join(',')}`),
 
   createNote: (
     vaultId: string,

@@ -23,8 +23,12 @@ public class SyncVersion {
     public bool IsSnapshot { get; set; }
     public bool IsNamed { get; set; }
 
-    /// <summary>Base64 ciphertext, or null when this response carries metadata only.</summary>
-    public string? Payload { get; set; }
+    /// <summary>
+    /// The ciphertext, or null when this response carries metadata only. Bytes on this side and
+    /// base64 on the wire, which is what System.Text.Json makes of a byte[] and what the column
+    /// held before it was stored as bytes.
+    /// </summary>
+    public byte[]? Payload { get; set; }
 
     public string? Label { get; set; }
     public string? DeviceId { get; set; }
@@ -40,7 +44,7 @@ public class SyncVersion {
     /// translated to SQL, and a method call would be evaluated on the client, which means reading
     /// the payload column that the whole path exists to avoid.
     /// </remarks>
-    public static SyncVersion From(Database.Schema.NoteVersion v, string? payload) {
+    public static SyncVersion From(Database.Schema.NoteVersion v, byte[]? payload) {
         return new SyncVersion {
             Id = v.Id,
             NoteId = v.NoteId,

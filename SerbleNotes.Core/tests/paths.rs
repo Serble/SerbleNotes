@@ -242,3 +242,23 @@ fn an_absolute_entry_is_taken_as_a_path_inside_the_vault() {
     // the file would be worse than filing it, so the empty first segment is simply tidied away.
     assert_eq!(note_name_from_archive_path("/Work/Alpha.md").unwrap(), "Work/Alpha");
 }
+
+/// `reparent` is asked about a path that is not under the folder being moved.
+///
+/// Every caller today passes a path whose parent really is `old_parent`, so this is about what
+/// happens when that stops being true - a bug elsewhere, or a folder operation racing a rename from
+/// another device. The answer has to be a value or an error, never a panic: this crate is compiled
+/// to WASM and a panic there poisons the module, so the next thing the user does is not "one note
+/// moved oddly" but "the app stopped working until it was reloaded".
+#[test]
+fn reparent_does_not_panic_on_a_path_outside_the_folder_being_moved() {
+    // A top-level note, with a folder named as the one being moved from.
+    assert!(reparent("Alpha", "Work", "Archive").is_ok());
+
+    // A note in a sibling folder whose name is shorter than the folder being moved from.
+    assert!(reparent("A/Alpha", "Work/Projects", "Archive").is_ok());
+
+    // And one whose name merely starts with the same characters, which is not the same as being
+    // inside it - "Working" is not under "Work".
+    assert_eq!(reparent("Working/Alpha", "Work", "Archive").unwrap(), "Archive/Alpha");
+}

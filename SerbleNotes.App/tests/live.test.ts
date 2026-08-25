@@ -207,9 +207,11 @@ test('a payload too large to push is fetched instead', async () => {
   assert.equal(event.versions[0].payload, null, 'the server left it out');
 
   calls.noteVersions = 0;
+  calls.noteVersionsByIds = 0;
   await phone.pushed(event);
 
-  assert.equal(calls.noteVersions, 1, 'so the device went and got it');
+  assert.equal(calls.noteVersionsByIds, 1, 'so the device went and got it');
+  assert.equal(calls.noteVersions, 0, 'by naming the versions it wanted, not the whole note');
   assert.equal(phone.editor.text, pc.editor.text);
 });
 

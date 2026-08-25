@@ -63,6 +63,25 @@ re-keying means rewriting every note name and every stored version - not built.
 The wire and storage format is identical for both kinds, so the sync path has exactly one code path.
 Attachments are encrypted with the same vault key.
 
+**The key material lives in `VaultKeys`, one row per person who can open the vault - not on the vault
+row.** There is exactly one such row today, for the owner, and nothing in the app can make a second.
+It is a table anyway because of what the alternative costs: the vault key is a single random key
+shared by everyone who can read the vault and what differs per person is the *wrapping* around it, so
+`WrappedKey` on the vault row states "one vault, one wrapping, one reader" in the schema itself, and
+sharing later would mean moving key material off a table with live rows in it. Here, sharing is
+inserting rows - seal the same vault key under the new member's password and add one. Nothing about
+the notes, the versions or the sync path changes, because none of them ever knew who could read them.
+
+- **A key row *is* the membership.** Without a key there is nothing to see, so a separate members
+  table would be a second structure that could disagree with the first about who can read a vault.
+  `VaultAccess` asks for the row and that is the access check; `IsOwner` is asked separately, because
+  deleting a vault and changing its password are the owner's rather than any holder's.
+- **The wire did not change.** `VaultResponse` is exactly the JSON the vault row used to serialise
+  to - the vault, plus *your* key - so no client had to learn that the key moved. What a client wants
+  was never "the vault row".
+- **No role column yet.** With one row per vault there is nothing for it to distinguish, and it is a
+  nullable column away whenever there is.
+
 ### Version control
 
 Versions form a **DAG**, not a line. Every version references its parent(s); content is stored as a
@@ -117,6 +136,11 @@ with the first.
 - **The name is ciphertext.** "Medical/Test results" tells you as much as the note body does, so it
   is sealed with the vault key like everything else and stored in `Note.Name` as a blob. Folder names
   therefore cannot leak either - they only exist inside that string.
+- **Every note has one, and the column says so.** `Note.Name` is not nullable and there is no
+  fallback that reads a title out of the first line of the body. That fallback existed for notes
+  written before names did, and it cost more than it looked: the body is not downloaded until a note
+  is opened, so drawing the tree had to fetch notes nobody had asked to read. A name that will not
+  decrypt now shows as "Unreadable name", which is what it is.
 - **Renaming is metadata, not an edit.** `PUT /api/notes/{id}/name` changes the sealed name, bumps
   the vault cursor and notifies other devices, but appends no version. History stays a record of what
   a note said, not where it was filed - and it maps onto a plain filesystem `rename()` later.
@@ -1022,6 +1046,16 @@ unset - the sign-in screen asks and remembers it on the device. Every request go
 in both. CORS on the backend already allows this: a Tauri webview's origin is `tauri://localhost` or
 `http://tauri.localhost`, never the API's own.
 
+**The application id comes from the server, not from the build.** `GET /api/config` answers with
+`SerbleApi:ClientId`, and `services/auth.ts` asks for it the first time somebody presses sign in and
+remembers it for the session. It used to be `VITE_SERBLE_APP_ID`, compiled into the client - which
+meant the id and the client secret it is paired with lived in two places, and pointing a deployment
+at a different Serble app was two changes that could disagree. It is not a secret: it travels in the
+query string of every sign-in, which is why the endpoint is anonymous and why the secret beside it in
+configuration is never part of the answer. A failed request is not remembered, so the next press
+tries again rather than repeating the error, and a server with no id configured says so rather than
+sending Serble a request it will refuse.
+
 **Signing in.** The native clients open the real system browser (`plugin-opener`) rather than a
 webview they control, so the app never sees the Serble password, and Serble sends the user back to
 `serblenotes://auth/callback`. Two things that follow:
@@ -1082,8 +1116,20 @@ touching auth. The flow:
 4. Backend upserts a local user row (storing the Serble refresh token) and issues **its own JWT**,
    which is what every subsequent request uses.
 
-**A valid signature is not enough.** `OnTokenValidated` also checks that the account row the token
-names still exists, and fails the token if it does not. Every row this app writes has a foreign key
+**A valid signature is not enough, and it is checked against two things.** `OnTokenValidated` loads
+the account row the token names and fails the token if it is gone - and then compares the token's
+`iat` against `NotesUser.TokensValidAfter`, refusing anything issued at or before that moment. These
+JWTs are self-contained and last a year by default, so without that column there is no way to end a
+session at all: a leaked token is good until it expires and "sign out everywhere" cannot be built on
+a signature check. Setting the timestamp revokes every token issued so far; a device that signs in
+again gets a newer one and carries on. The account row is loaded either way, so the second check is
+free. Two things about it that are easy to get wrong: the issue time is read off the **claim**, not
+by casting `context.SecurityToken` - that is a `JsonWebToken` under this framework's handler and a
+`JwtSecurityToken` under the older one, so a cast to the wrong one is silently null and the check
+silently stops working. And a token with no `iat` at all is treated as *older* than the cutoff, because
+failing open would make revocation skippable by anyone who could get such a token minted.
+
+The existence half matters for its own reason. Every row this app writes has a foreign key
 to `Users`, so a token for a deleted account otherwise gets all the way to the database and dies on a
 constraint violation - a 500 for what is really a stale credential. The client turns a 401 into "sign
 in again"; it can do nothing sensible with a 500. This costs one primary-key lookup per authenticated
@@ -1118,31 +1164,60 @@ autosave writes it over the real note. Two consequences to respect:
 - **Never bypass `apply_diff` to call `diffy::apply` directly.** The guard is the only thing standing
   between a mis-parented version and silent corruption.
 
-**Backend API** - all routes under `/api` so the SPA fallback can never shadow them:
+**Backend API** - all routes under `/api` so the SPA fallback can never shadow them. A version id is
+chosen by the client, so `POST /notes/{id}/versions` asks two separate questions about it: is it
+already on *this* note (a retry, answered with the existing row), and does it exist anywhere at all
+(a collision, answered with a 409 and nothing else). Asking only the second - or asking the first
+without saying which note it meant - is how the endpoint used to hand back a row from a vault the
+caller had never been near.
 
 | Route | Purpose |
 | --- | --- |
 | `GET /api` | Health. |
+| `GET /api/config` | The Serble application id, so no client is built with it. Anonymous - it is what the sign-in screen needs. |
 | `POST /api/account` | Serble OAuth code -> this backend's JWT. `GET` returns the current user. |
 | `GET/POST /api/vaults`, `GET/DELETE /api/vaults/{id}` | Vault CRUD. |
-| `PUT /api/vaults/{id}/password` | New wrapped key, salt and KDF params after a password change. |
+| `PUT /api/vaults/{id}/password` | New wrapped key, salt and KDF params after a password change. Rewraps the caller's `VaultKeys` row. |
 | `GET/POST /api/vaults/{id}/notes` | List and create notes. |
 | `GET /api/vaults/{id}/changes?since=N&bodies=false` | The sync read path. `bodies=false` leaves the ciphertext out - see "Opening a vault". |
-| `GET/POST /api/notes/{id}/versions`, `DELETE /api/notes/{id}` | Version DAG append and note tombstone. |
+| `GET/POST /api/notes/{id}/versions`, `DELETE /api/notes/{id}` | Version DAG append and note tombstone. `?ids=` fetches named versions - see "Opening a vault". |
 | `PUT /api/notes/{id}/name` | Rename or move. Metadata only - appends no version. |
 | `GET /api/sync` | WebSocket. Notifications only, token via `?access_token=`. |
 
-**Opening a vault does not download it.** `/changes` sends version metadata only unless asked for
-`bodies=true`, and the client fetches a note's ciphertext from `GET /notes/{id}/versions` when the
-note is opened. This is not a small saving: the vault it was measured on is 196 notes and 6.5 MB, of
+**Opening a vault does not download it, and neither does opening a note.** `/changes` sends version
+metadata only unless asked for `bodies=true`, and the client fetches ciphertext from
+`GET /notes/{id}/versions?ids=...` when it actually has to read something. This is not a small saving: the vault it was measured on is 196 notes and 6.5 MB, of
 which **92% is five large notes**, and none of it is needed to draw a tree built from note names.
 Metadata for that vault is 160 KB and answers in about 100 ms, against 1.6 s for the whole thing.
 Three rules keep it safe:
 
+- **A note is opened by its chain, not by its history.** Rebuilding a version means walking back to
+  the nearest snapshot and replaying forward, which is at most `SNAPSHOT_EVERY` diffs - so those are
+  the only payloads worth having. `VaultStore.chainFrom` does that walk over metadata the device
+  already holds (opening the vault brought every parent pointer and snapshot flag with no ciphertext
+  attached), and `ensureVersions` fetches exactly what that walk will read and nothing else. On a
+  41-version note that is 8 versions and 20% of the bytes, and the ratio only improves the longer a
+  note has been edited, because the chain length is fixed and the history is not.
+- **`ensureVersions` is the door, `ensureNote` is the common case.** `ensureNote(id)` is
+  `ensureVersions([headOf(id)])`. Anything reading a *particular* version says so: `restore` asks
+  for the version and the head, `reconcile` asks for the remote head and the baseline and then - once
+  it knows which it is - the common ancestor, and the history panel asks for the version it is
+  drawing and that version's parent, because the diff is against the parent.
+- **A chain that cannot be walked falls back to the whole note.** A parent whose metadata never
+  arrived, or a history with no snapshot at the bottom, makes `chainFrom` return null rather than a
+  short answer - a chain read one version short rebuilds the wrong document, and that is the failure
+  this project cares about most. `GET /notes/{id}/versions` with no `ids` still exists for exactly
+  that, and for nothing else.
+- **The by-ids request is scoped to the note in the URL**, so naming a version from somewhere else
+  gets it left out of the answer rather than returned. Ids travel in the query string, so the client
+  batches at `IDS_PER_REQUEST` and the server refuses more than 200 - neither is reached by opening a
+  note, they are there so a pathological history cannot build a request too long to send.
 - **A missing body is never an empty one.** `bodyOf` in `store.ts` throws rather than returning `''`,
   because text is what the next autosave diffs against - a note that opened blank would be saved
-  blank. Everything that reads text calls `VaultStore.ensureNote` first, and `saveNote` and
-  `restore` call it themselves so no caller can forget.
+  blank. `materialise` refuses a version it does not hold, and `ensureVersions` is what keeps that
+  refusal from being seen; `saveNote` and `restore` call it themselves so no caller can forget.
+  `hasChain` asks the same question without the network, which is how the history panel avoids
+  flashing "downloading" for a version it can already draw.
 - **The device cache holds ciphertext, never plaintext** (`services/vaultCache.ts`, IndexedDB). It is
   the same bytes the server holds, so keeping them is no weaker than the sync that fetched them; a
   cache of decrypted notes would undo the point of the product.
@@ -1150,6 +1225,14 @@ Three rules keep it safe:
   nothing about whether other devices' writes below it have been seen. Storing it would make the
   next delta skip them permanently. In memory that only cost a re-pull; on disk it would be
   unrecoverable.
+
+**The client's own tests cover this**, in `tests/sync.test.ts`, driven through `support/fakeServer.ts`
+- which mirrors the by-ids endpoint including its note scoping, because a fake that is more generous
+than the server would hide the bug it exists to catch. Four of them are about what is *not*
+downloaded: that opening a note asks for no more than a chain's worth, that every version it did ask
+for is one the replay actually reads (the fetched set and the walked set must be equal - anything
+extra is bytes nobody will look at), that reading an old version fetches that version's own chain
+rather than the note, and that a second open asks for nothing at all.
 
 `services/stores.ts` keeps one `VaultStore` per vault for the session, keyed by vault id **and** key -
 a store built under one key must never serve a session that unlocked with another. Cold open of that
@@ -1179,9 +1262,29 @@ things about it are decisions rather than details:
   vault, not a key: a device that has not cached this vault's key asks for the password exactly as
   it would have done from the list.
 
+**Ciphertext is stored as bytes, not as base64 text.** `NoteVersion.Payload` is a `longblob`, and
+`Size` is its length in bytes. The wire is still base64 - JSON has no other way to carry bytes, and
+System.Text.Json renders a `byte[]` as exactly that string, so no client noticed the change - but
+storing the encoded form cost a third more disk than the ciphertext it held, on far and away the
+largest table here, and `utf8mb4` made MySQL reserve four bytes per character of it whenever a query
+needed a temporary table. On the 913-version dev database that was 8.5 MB of column holding 6.3 MB of
+ciphertext. Changing this after release would have meant rebuilding that table, which is why it was
+done before there was one.
+
+The one thing this adds to the write path: the base64 has to be decoded, and something has to happen
+when it is not base64. `Helpers/Ciphertext.TryDecode` is the only place that decoding happens, and a
+malformed payload is a 400 rather than the unhandled exception it would otherwise be. The server
+still cannot check that a payload is a *valid* sealed blob - that is the whole point of it - only
+that the string is the encoding it claims to be.
+
 **Sync cursor.** Every vault carries a monotonic `Cursor`; each write reserves the next value via
 `IVaultRepo.NextCursor` (an `UPDATE ... SET Cursor = Cursor + 1` and read inside one transaction, so
 two devices writing at once can't be handed the same number) and stamps the changed rows with it.
+That same statement carries the change to `Vault.StorageBytes`, because the two move on exactly the
+same writes and one statement cannot leave them disagreeing. It follows that a vault row must never
+be written back wholesale from a request that loaded it earlier: both columns are counters another
+device can move in between, which is why tombstoning a vault is a targeted `ExecuteUpdate` of the two
+columns that actually change rather than an `Update(vault)`.
 `/changes` reports the highest cursor *in the rows it returned*, not the vault's current one -
 reporting the vault's would skip a write that landed between the two queries.
 
@@ -1194,8 +1297,18 @@ schema it could not verify. Consequences worth knowing: a destructive migration 
 new build starts with nobody reviewing it first, and rolling back means writing a migration that
 undoes it.
 
-**Deletes are tombstones.** A client that was offline when something was deleted only learns about it
-from the `deleted` row coming back through `/changes`.
+**Deletes are tombstones, and they carry a time.** A client that was offline when something was
+deleted only learns about it from the `deleted` row coming back through `/changes`. The column is
+`DeletedAt`, not a flag: nothing is ever hard-deleted today, so a retention window is the only way
+this data ever actually goes away, and "purge tombstones older than N days" is a question a bool
+cannot answer. Nothing reads it yet - it is there now because it cannot be reconstructed later. The
+wire still carries `deleted` as a boolean, computed from it, because that is the only question a
+client asks.
+
+**Nothing frees storage yet.** Deleting a note keeps its whole history, which is the point, but it
+means an account's usage only ever grows. A purge job is what brings `Vault.StorageBytes` back down,
+and until one exists the storage limit's message says so rather than implying that deleting things
+will help.
 
 **Web client** (`SerbleNotes.App/src/`) - `core/` is the only door to the WASM; `services/store.ts`
 holds the client-side DAG (materialise-by-walking-back-to-a-snapshot, memoised; snapshot every 10
@@ -1266,10 +1379,34 @@ answers the *next* question on the user's behalf. `components/Modal.tsx` and the
 consequence rather than "Are you sure?". There are no `window.confirm` or `window.prompt` calls left
 in the client; do not add one.
 
-This rule is about choices over the user's own data and security. Server-side resource limits
-(`MaxVaultsPerUser`, `MaxVersionPayloadBytes`) are a different question - they protect the service
-and other people on it - but they should still be set high enough that nobody ordinary meets them,
-and they must fail with a clear reason rather than a silent truncation.
+This rule is about choices over the user's own data and security. Server-side resource limits are a
+different question - they protect the service and other people on it - but they should still be set
+high enough that nobody ordinary meets them, and they must fail with a clear reason rather than a
+silent truncation.
+
+Every one of them is asked for through `IUserLimits`, never by reading config in a controller.
+Limits are about to stop being the same for everybody - a plan, a grandfathered account, an admin
+with none - and every call site that read `IOptions<GeneralSettings>` directly would have to be found
+and changed. `ConfiguredUserLimits` gives everyone the configured defaults today and ignores the
+account id it is handed; the parameter is there because it is the thing that will decide the answer.
+The checks live behind the same interface as the limits, because each one is a limit plus the query
+that measures it and splitting those leaves the expensive half somewhere it can be forgotten.
+
+- **What is enforced:** vaults per account, notes per vault, bytes in a single version, and total
+  ciphertext stored across an account's vaults. The last is the one that actually bounds the service,
+  because a note's history grows without end as it is edited and every tenth save is a full copy of
+  it - an account's real cost is its history rather than its note count.
+- **The storage total is read per write**, which is affordable only because it sums the owner's
+  *vault* rows - at most a hundred of them, by the vault limit - rather than their versions. That is
+  what `Vault.StorageBytes` is for.
+- **It is charged to the vault's owner, not to the caller.** Identical today; it is written that way
+  so a shared vault cannot spend whichever member happens to be typing.
+- **There is deliberately no cap on versions per note.** It is the one limit of this kind whose
+  failure mode is refusing to save something the user has already written. Storage covers the same
+  ground without ever being the reason a note cannot be saved for the first time.
+- **A refusal names the number that refused it**, through `Helpers/Sizes.Describe`. Dividing straight
+  to megabytes turned a 100 KB cap into "0 MB" - a message telling someone their note is too big to
+  fit in nothing.
 
 Where this lives today: `services/passwordStrength.ts` and `components/PasswordStrength.tsx`, and the
 unencrypted-vault notice in `CreateVaultDialog`, which states plainly that the server can read it.
@@ -1279,7 +1416,7 @@ unencrypted-vault notice in `CreateVaultDialog`, which states plainly that the s
 The core is the one component where a regression is unrecoverable: it holds the only copy of the
 logic that turns stored bytes back into someone's notes, and a bug that corrupts rather than crashes
 can destroy history that no backup helps with, because the server only ever had ciphertext. It is
-therefore held to a stricter standard than the rest of the repo - **125 tests, and any change to
+therefore held to a stricter standard than the rest of the repo - **135 tests, and any change to
 `crypto.rs` or `version.rs` needs tests before it lands.**
 
 ```fish
@@ -1296,6 +1433,23 @@ cd SerbleNotes.Core; cargo test --test version
 | `tests/paths.rs` | Name and folder semantics: what gets tidied, what gets refused, and how renaming a folder moves what is under it. Also the archive layout - what a note is called as a file, and what an archive from anywhere else means. Shared with the future filesystem, so all three agree on where a note lives. |
 | `tests/properties.rs` | proptest invariants over generated documents and edits - the cases nobody thought to write. |
 
+Two things in `crypto.rs` and `version.rs` are tested only because mutation testing said nothing was
+looking at them, and both are worth knowing about:
+
+- **`KdfParams::recommended` is checked against a floor, not against its own numbers.** Every other
+  test in the suite builds deliberately weak parameters so it runs in milliseconds, which meant
+  `recommended()` could have returned 1 KiB and one iteration and the whole suite would still have
+  passed - on the one function standing between a vault password and somebody holding the wrapped
+  blob. It is asserted at or above OWASP's Argon2id floor (19 MiB, 2 passes) rather than at an exact
+  value, because the figures are meant to be raised and a test that had to be edited every time
+  would be deleted the second time.
+- **An empty side of a merge stays empty.** `merge3` pads every side with a trailing newline before
+  re-merging a conflict, and `""` is the case that padding must leave alone: it is not a document
+  missing its newline, it is a document with nothing in it. Padding it turns a deletion into a blank
+  line nobody typed. The test counts the lines between the markers rather than trimming them - a
+  section holding one empty line trims to nothing, which is exactly the difference being tested, and
+  the first version of that assertion missed it for that reason.
+
 Two rules that matter more than coverage numbers:
 
 - **Test that wrong input fails, not just that right input works.** Most of the dangerous bugs here
@@ -1305,14 +1459,60 @@ Two rules that matter more than coverage numbers:
   combining marks, content that is itself a diff, content containing conflict markers. Add a shape
   when you find one that breaks something; the corpus is the institutional memory.
 
+### The backend's tests
+
+`SerbleNotes.Backend.Tests` is xUnit over the controllers and services, with the EF repos replaced by
+in-memory fakes (`Support/FakeRepos.cs`) and one `World` that wires them together the way `Program.cs`
+does. No database: what is worth testing here is the logic above the repos, and everything below them
+is EF's own behaviour rather than ours.
+
+```fish
+dotnet test SerbleNotes.Backend.Tests
+```
+
+| Suite | Covers |
+| --- | --- |
+| `AccessTests.cs` | Who may open what. Access is *holding a key row*, not being the owner; "not found" and "not yours" are the same 404; only the owner may delete a vault. |
+| `VersionWriteTests.cs` | Appending to the DAG: retries, colliding ids, scoped parents, payload decoding, cursors, storage accounting, what goes out over the socket. |
+| `VaultTests.cs` | Vault creation and the key row, password rewrapping, the `/changes` cursor rule, tombstones. |
+| `LimitsTests.cs` | The resource limits, mostly at their boundaries, and that the bill goes to the vault's owner. |
+| `SyncTests.cs` | Presence and delivery, against a fake `WebSocket` that records what was written to it. |
+| `ConfigTests.cs` | The anonymous config endpoint: the application id it hands out, and the client secret beside it that it must not. |
+| `HelperTests.cs` | Base64 decoding and size formatting - two small functions with a wrong answer that looks right. |
+
+**The fakes hand back copies, and that is the point of them.** A fake that returns the stored instance
+lets a caller change a row and forget to save it, because it changed the row in place - so the test
+meant to prove the save happens proves nothing. Mutation testing found this: deleting `UpdateNote`
+from three call sites broke no test. `FakeNoteRepo.Copy` is what makes "was this persisted" a question
+the suite can actually ask.
+
+**Error message text is deliberately not asserted.** Most of the mutants that survive here replace a
+message string with `""`, and killing them would mean pinning prose that is meant to be rewritten.
+The status code is the contract; the sentence is not.
+
 ### The client's own tests
 
-`SerbleNotes.App/tests/` holds the few pieces of the client that can be wrong rather than broken -
-today the markdown table layout, which rewrites the user's text and whose bugs save a table with a
-cell missing rather than failing, the CSS scoping in `cssScope.ts`, whose bug is a note styling
-the app with nothing on the screen to say so, and the diff reader in `diff.ts`, whose bug is a
-version shown as having changed less than it did. Everything else in the client is a button that either
-works or visibly does not.
+`SerbleNotes.App/tests/` holds the pieces of the client that can be wrong rather than broken - the
+ones whose bugs produce a plausible result instead of a failure. Everything else in the client is a
+button that either works or visibly does not, and is not worth a test.
+
+| Suite | Covers |
+| --- | --- |
+| `sync.test.ts`, `merge.test.ts`, `live.test.ts` | The store against `support/fakeServer.ts`, with the real core doing the crypto: cursors, the DAG, partial fetching, merges, offline, presence. |
+| `paths.test.ts` | The file manager - naming, collisions, moving, renaming folders, deleting, empty folders. |
+| `archive.test.ts` | Export and import, through the real fflate and the real `archive_path`. |
+| `tableFormat.test.ts`, `tables.test.ts`, `tableExtent.test.ts` | The markdown table layout, which rewrites the user's text. |
+| `diff.test.ts` | The diff reader, whose bug is a version shown as having changed less than it did. |
+| `conflicts.test.ts` | Reading conflict markers back out of a note. |
+| `cssScope.test.ts` | The CSS scoping, whose bug is a note styling the app with nothing on the screen to say so. |
+| `dates.test.ts` | Reading the server's zone-less UTC stamps, which are hours out for everyone if read as local time. |
+
+`paths.test.ts` and `archive.test.ts` were absent for a long time while this file claimed the move and
+rename functions were "what the tests cover". They were not, and the operations they cover are exactly
+the shape that needs them: renaming a folder rewrites every note name underneath it, and import decides
+what happens to a note the user already had. The blank-rename test is the one that earns its place
+twice over - it fails if `join` is changed back to normalising the whole joined string, which is a real
+bug this project has already had once.
 
 The DOM half of drawing a note - the sanitiser, the CSS parse, the decorations `htmlView` builds -
 has no tests here, because a DOM is what it needs and jsdom is not a dependency. It was driven under
@@ -1335,6 +1535,102 @@ dependency list is unchanged. Two things make that work and are worth knowing be
 
 The directory is outside `tsconfig.json`'s `include`, so `tsc` does not typecheck it - which is what
 lets a test import `node:test` without `@types/node` being a dependency of the client.
+
+## Mutation testing
+
+Coverage says a line ran. Mutation testing says whether anything would have *noticed* it being wrong,
+which is the question a test suite is actually answering. All three components have it wired up, and
+all three have been made better by what it found.
+
+```fish
+cd SerbleNotes.Backend.Tests; dotnet stryker      # ~40s
+cd SerbleNotes.App; npm run test:mutants          # one module, ~70s - see below
+cd SerbleNotes.Core; cargo mutants -j 4           # ~4 min
+```
+
+| Tool | Config | Scope |
+| --- | --- | --- |
+| Stryker.NET | `SerbleNotes.Backend.Tests/stryker-config.json` | Controllers, services, helpers and the DTOs. Excludes `SerbleApiClient` and the two controllers that are only HTTP plumbing. |
+| StrykerJS | `SerbleNotes.App/stryker.config.json`, `scripts/mutation-tests.sh` | `store.ts`, `noteSync.ts`, `diff.ts`, `tableFormat.ts`, `cssScope.ts` - the client code whose bugs are silent. Run one module at a time. |
+| cargo-mutants | `SerbleNotes.Core/mutants.toml` | Everything but `lib.rs`, which is the wasm-bindgen surface and unreachable from `cargo test`. |
+
+**A surviving mutant is a question, not a defect.** Three kinds show up here and only one is worth
+acting on:
+
+- **A real gap.** Something is unverified. These are the ones to fix, and they were: the KDF
+  parameters nothing was reading, the merge padding that could turn a deletion into a blank line, the
+  `/changes` cursor that no test would notice becoming a minimum, the note writes that were not
+  actually being persisted (see the fakes note above), and two shapes the diff reader really does get
+  handed - a one-line change, whose hunk header carries no counts at all, and the no-newline marker,
+  which diffy writes on *both* sides of a change while only the last line was ever asserted.
+- **An equivalent mutant**, which cannot be killed because it does not change behaviour.
+  `old_parent.len() + 1` becoming `* 1` in `reparent` is one: the extra separator it leaves behind is
+  collapsed by `normalise_path` a line later, so the two versions genuinely agree. Leave it and say
+  why rather than contorting a test around it.
+- **Something not worth pinning.** Most of the backend's survivors replace a user-facing message with
+  `""`. Killing those means asserting prose that is meant to be rewritten, and a suite full of that
+  is one people start ignoring. The status code is the contract.
+
+Scores as they stand, and what they mean rather than what they are:
+
+| Target | Score | |
+| --- | --- | --- |
+| Backend | 73% | The rest is message text, by the rule above. |
+| Core | 82 of 84 viable | The two survivors are equivalent mutants. |
+| `services/diff.ts` | 89% | Was 81% - see below. |
+| `components/cssScope.ts` | 47% | Mostly untestable here, and known - see below. |
+
+**`cssScope.ts` scores badly for a reason that is already written down.** Two thirds of it needs a
+DOM - `CSSStyleSheet`, `document.implementation` - and jsdom is deliberately not a dependency, so
+`scopeCss`, `parse` and `rulesToText` are not exercised at all by `cssScope.test.ts`. That is the
+limitation described under "The client's own tests", now with a number on it. The score is a reason
+to add jsdom if this ever gets touched often, not a reason to write tests around the DOM.
+
+The remaining survivors there are the quote handling in `splitSelectors`, and those are **not worth
+killing**: every realistic selector with a comma in a string also has it inside brackets
+(`[title="a,b"]`, `:is(a, b)`), and the bracket depth alone already prevents the split. The quote
+branch is defensive cover for a case the tests cannot construct without inventing selectors nobody
+would write, which is precisely the useless test this section exists to avoid.
+
+**StrykerJS is run one module at a time, and three things had to be fixed before it ran at all.** The
+client's tests are node's own runner rather than one Stryker has a plugin for, so the only option is
+the command runner - which has no per-test coverage analysis and reruns its whole command for every
+mutant. `npm run test:mutants` is one module; widen it by changing both halves together:
+
+```fish
+cd SerbleNotes.App
+env SERBLENOTES_CORE_PKG="$PWD/../SerbleNotes.Core/pkg" STRYKER_TESTS=tests/tables.test.ts \
+    npx stryker run --mutate src/components/tableFormat.ts
+```
+
+- **`ignorePatterns` is not optional here.** Stryker copies the project into a sandbox, and this one
+  contains a Tauri app: `src-tauri/target` is 9 GB of Rust build artifacts and `src-tauri/gen`
+  another 1.2 GB. Copying them made every run take minutes per mutant no matter how little was being
+  mutated, which reads as "mutation testing is just slow" rather than as a misconfiguration. With
+  them excluded a module takes about 70 seconds.
+- **`SERBLENOTES_CORE_PKG` tells the sandbox where the crate is.** The tests find the WASM core three
+  levels up from `tests/support/`; from a sandbox that lands in the temp directory instead. The two
+  places that resolve it (`hooks.mjs` and `support/core.ts`) take the override when it is set and the
+  relative path otherwise, so an ordinary `npm test` is unchanged.
+- **`scripts/mutation-tests.sh` refuses to run no tests.** node's test runner exits 0 when its
+  argument matches no files, which Stryker reads as "the tests passed" - so a typo in the scope makes
+  every mutant survive and prints a full report of nonsense that looks exactly like a real result.
+  The script fails instead. This is not hypothetical: the first version of this config put
+  `${STRYKER_TESTS:-...}` in the command line, Stryker does not expand it, and node matched nothing.
+
+Stryker.NET and cargo-mutants both use their native runners and need none of this - the whole backend
+is about 40 seconds, the whole core about 4 minutes.
+
+**What mutation testing found that review did not.** Two of these were bugs in the product rather
+than gaps in the tests, which is the part worth remembering:
+
+- **`BroadcastPresence` handed out a stale list.** It discovered dead sockets *while* sending, so
+  every device visited before a dead one was told about a device that had gone - and since nothing
+  broadcasts again on its own, that "open elsewhere" mark outlived the device that caused it. Which
+  devices got the stale list depended on the order a `ConcurrentDictionary` happened to enumerate in,
+  so it was intermittent, and the test written for it was flaky one run in five before the fix. Dead
+  connections are now pruned before presence is worked out.
+- **The backend's fakes were hiding missing writes**, described under "The backend's tests".
 
 ## Backend code style
 
@@ -1391,6 +1687,7 @@ cd SerbleNotes.App; npm run build:core          # wasm-pack -> SerbleNotes.Core/
 # Web client. Dev uses Vite on :3000 proxying /api (and the socket) to the backend on :5179.
 cd SerbleNotes.App; npm run dev
 cd SerbleNotes.App; npm test                    # node's own runner over SerbleNotes.App/tests
+dotnet test SerbleNotes.Backend.Tests           # xUnit over the controllers and services
 cd SerbleNotes.App; npm run build               # -> SerbleNotes.Backend/wwwroot
 cd SerbleNotes.App; npm run build:app           # -> SerbleNotes.App/dist, what Tauri bundles
 
@@ -1429,7 +1726,9 @@ say so:
   `set -x NDK_HOME ~/Android/Sdk/ndk/27.1.12297006`.
 - **Windows:** Tauri has no supported cross-compile to Windows, so it builds on Windows or in CI.
   `.github/workflows/clients.yml` builds Linux, Windows and Android from one commit; it needs
-  `VITE_SERBLE_APP_ID` set as a repository variable or the built apps have no OAuth client id.
+  `VITE_API_BASE_URL` set as a repository variable, because a packaged app is not served by the
+  backend and has nowhere else to look for it. The OAuth client id needs nothing here - it comes
+  from that server.
 
 ## Working agreements
 

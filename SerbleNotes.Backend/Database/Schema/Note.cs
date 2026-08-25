@@ -20,11 +20,9 @@ public class Note {
     /// The note's name and folder path, encrypted. A name is content: "Medical/Test results" tells
     /// you as much as the note body does, so the server gets it as ciphertext like everything else.
     /// Folders exist only as separators inside this string - there are no folder rows to leak.
-    ///
-    /// Null on notes written before names existed; those clients fall back to the first line.
     /// </summary>
     [StringLength(2048)]
-    public string? Name { get; set; }
+    public string Name { get; set; } = null!;
 
     /// <summary>
     /// Last version the server accepted. Clients treat this as a hint: with concurrent devices the
@@ -39,7 +37,15 @@ public class Note {
 
     public DateTime UpdatedAt { get; set; }
 
-    public bool Deleted { get; set; }
+    /// <summary>
+    /// When the note was tombstoned, or null while it is live. See <see cref="Vault.DeletedAt"/> for
+    /// why this is a time rather than a flag.
+    /// </summary>
+    public DateTime? DeletedAt { get; set; }
+
+    /// <summary>The wire has always carried a flag, and clients only ever ask the yes/no question.</summary>
+    [NotMapped]
+    public bool Deleted => DeletedAt != null;
 
     // Navigation properties
     [JsonIgnore]

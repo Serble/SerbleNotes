@@ -112,6 +112,17 @@ export class Device {
     return this.net(() => this.store.ensureNote(noteId));
   }
 
+  ensureVersions(versionIds: (string | null)[]): Promise<void> {
+    return this.net(() => this.store.ensureVersions(versionIds));
+  }
+
+  /** The whole history on this device, for a test that is about to read all of it. */
+  ensureHistory(noteId: string): Promise<void> {
+    return this.net(() =>
+      this.store.ensureVersions(this.store.historyOf(noteId).map((version) => version.id)),
+    );
+  }
+
   rename(noteId: string, path: string): Promise<void> {
     return this.net(() => this.store.renameNote(noteId, path));
   }

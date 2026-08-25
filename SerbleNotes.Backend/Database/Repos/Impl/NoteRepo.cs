@@ -11,7 +11,7 @@ public class NoteRepo(NotesDatabaseContext context) : INoteRepo {
 
     public async Task<Note[]> GetNotesInVault(string vaultId) {
         return await context.Notes
-            .Where(n => n.VaultId == vaultId && !n.Deleted)
+            .Where(n => n.VaultId == vaultId && n.DeletedAt == null)
             .OrderBy(n => n.CreatedAt)
             .ToArrayAsync();
     }
@@ -23,6 +23,11 @@ public class NoteRepo(NotesDatabaseContext context) : INoteRepo {
             .Where(n => n.VaultId == vaultId && n.Cursor > sinceCursor)
             .OrderBy(n => n.Cursor)
             .ToArrayAsync();
+    }
+
+    public Task<int> CountNotesInVault(string vaultId) {
+        // Tombstones count. They are rows the service stores, and their history is still there.
+        return context.Notes.CountAsync(n => n.VaultId == vaultId);
     }
 
     public Task CreateNote(Note note) {

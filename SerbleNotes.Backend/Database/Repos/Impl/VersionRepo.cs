@@ -6,13 +6,25 @@ namespace SerbleNotes.Backend.Database.Repos.Impl;
 
 public class VersionRepo(NotesDatabaseContext context) : IVersionRepo {
 
-    public Task<NoteVersion?> GetVersion(string id) {
-        return context.NoteVersions.FindAsync(id).AsTask();
+    public Task<NoteVersion?> GetVersionInNote(string noteId, string id) {
+        return context.NoteVersions
+            .FirstOrDefaultAsync(v => v.Id == id && v.NoteId == noteId);
+    }
+
+    public Task<bool> VersionExists(string id) {
+        return context.NoteVersions.AnyAsync(v => v.Id == id);
     }
 
     public async Task<NoteVersion[]> GetVersionsForNote(string noteId) {
         return await context.NoteVersions
             .Where(v => v.NoteId == noteId)
+            .OrderBy(v => v.Cursor)
+            .ToArrayAsync();
+    }
+
+    public async Task<NoteVersion[]> GetVersionsByIds(string noteId, string[] ids) {
+        return await context.NoteVersions
+            .Where(v => v.NoteId == noteId && ids.Contains(v.Id))
             .OrderBy(v => v.Cursor)
             .ToArrayAsync();
     }

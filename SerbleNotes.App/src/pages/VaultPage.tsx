@@ -290,6 +290,48 @@ function Workspace({
   );
 
   /**
+   * A version's ciphertext is not on the device until something asks for it.
+   *
+   * Opening a vault brings every version's metadata and none of its bodies, and opening a note
+   * brings only the chain that rebuilds its current text - so a version picked out of the history is
+   * usually a row this device cannot yet read. It and the version before it are fetched here,
+   * because the diff is against that parent.
+   *
+   * `fetched` exists to re-run the memo below once they arrive; it is deliberately not a dependency
+   * of this effect, which would then re-run itself forever.
+   */
+  const [preview, setPreview] = useState({ loading: false, fetched: 0 });
+
+  useEffect(() => {
+    if (!previewVersion) {
+      return;
+    }
+
+    // Already here - no flash of "loading" for a version this device can rebuild on its own.
+    if (store.hasChain(previewVersion.id) && store.hasChain(previewVersion.parentId)) {
+      return;
+    }
+
+    let cancelled = false;
+    setPreview((current) => ({ ...current, loading: true }));
+
+    void store
+      .ensureVersions([previewVersion.id, previewVersion.parentId])
+      // Whatever could not be fetched is reported where it is read: `materialise` says which version
+      // is missing and why. This only keeps a failed fetch from being an unhandled rejection.
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) {
+          setPreview((current) => ({ loading: false, fetched: current.fetched + 1 }));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewVersion, store]);
+
+  /**
    * Whether an older version is read as the change it made or as the whole note. Remembered on the
    * device rather than reset per note: it is how this person reads a history, not a fact about one.
    */
@@ -322,7 +364,7 @@ function Workspace({
     }
 
     return { current: safeMaterialise(store, previewVersion.id), previous };
-  }, [previewVersion, store]);
+  }, [previewVersion, store, preview.fetched]);
   const [filter, setFilter] = useState("");
   const filterInput = useRef<HTMLInputElement>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -1039,16 +1081,17 @@ function Workspace({
                 </div>
               </div>
               <div className="version-body">
-                {!asDiff || !previewTexts ? (
+                {preview.loading ? (
+                  <p className="muted small">Downloading this version...</p>
+                ) : !asDiff || !previewTexts ? (
                   <MarkdownPreview
                     text={safeMaterialise(store, previewVersion.id)}
                   />
                 ) : previewTexts.previous === null ? (
                   <>
                     <p className="muted small">
-                      The version before this one has not been downloaded, so
-                      there is nothing to compare against. This is the whole
-                      note.
+                      The version before this one cannot be rebuilt, so there is
+                      nothing to compare against. This is the whole note.
                     </p>
                     <MarkdownPreview text={previewTexts.current} />
                   </>

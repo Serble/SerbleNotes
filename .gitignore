@@ -61,3 +61,11 @@ npm-debug.log*
 # Files the operating system leaves behind. The zip importer already skips these; so should git.
 .DS_Store
 Thumbs.db
+
+# Mutation testing. Each tool copies the project somewhere to mutate it, and writes its report
+# beside that copy - none of it is source.
+.stryker-tmp/
+StrykerOutput/
+mutants.out/
+mutants.out.old/
+/SerbleNotes.App/reports/

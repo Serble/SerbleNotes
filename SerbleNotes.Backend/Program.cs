@@ -6,11 +6,13 @@ using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Net.Http.Headers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using SerbleNotes.Backend.Config;
 using SerbleNotes.Backend.Database;
 using SerbleNotes.Backend.Database.Repos;
 using SerbleNotes.Backend.Database.Repos.Impl;
+using SerbleNotes.Backend.Database.Schema;
 using SerbleNotes.Backend.Services;
 using SerbleNotes.Backend.Services.Impl;
 
@@ -27,7 +29,8 @@ builder.Services.AddScoped<IUserRepo, UserRepo>();
 builder.Services.AddScoped<IVaultRepo, VaultRepo>();
 builder.Services.AddScoped<INoteRepo, NoteRepo>();
 builder.Services.AddScoped<IVersionRepo, VersionRepo>();
-builder.Services.AddScoped<IVaultAccess, VaultAccess>();
+builder.Services.AddScoped<IVaultAccess, VaultAccessService>();
+builder.Services.AddScoped<IUserLimits, ConfiguredUserLimits>();
 builder.Services.AddScoped<INotesService, NotesService>();
 builder.Services.AddScoped<IJwtManager, JwtManager>();
 
@@ -72,8 +75,36 @@ builder.Services.AddAuthentication(options => {
             }
 
             IUserRepo tokenUsers = context.HttpContext.RequestServices.GetRequiredService<IUserRepo>();
-            if (await tokenUsers.GetUser(userId) == null) {
+            NotesUser? tokenUser = await tokenUsers.GetUser(userId);
+            if (tokenUser == null) {
                 context.Fail("The account this token was issued for no longer exists.");
+                return;
+            }
+
+            // These tokens are self-contained and last a year, so without this there is no way to end
+            // a session at all - a token that leaks is good until it expires, and "sign out
+            // everywhere" cannot be built on top of a signature check. The account row is already
+            // being loaded by the check above, so the revocation test is free.
+            //
+            // Compared against the token's issue time rather than a list of revoked tokens, because
+            // the thing being revoked is every token issued before a moment, and a device that then
+            // signs in again gets a newer one and carries on.
+            if (tokenUser.TokensValidAfter != null) {
+                // Read off the claim rather than off context.SecurityToken, which is a JsonWebToken
+                // under this framework's handler and a JwtSecurityToken under the older one - a cast
+                // to the wrong one is silently null, and a revocation check that silently reads no
+                // issue time is a revocation check that does not work.
+                DateTime? issuedAt = null;
+                if (long.TryParse(context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Iat), out long seconds)) {
+                    issuedAt = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime;
+                }
+
+                // A token with no issue time cannot be shown to be newer than the cutoff, so it is
+                // treated as older. Failing open here would make revocation skippable by anyone able
+                // to get such a token minted.
+                if (issuedAt == null || issuedAt <= tokenUser.TokensValidAfter) {
+                    context.Fail("This session has been signed out. Please sign in again.");
+                }
             }
         },
 

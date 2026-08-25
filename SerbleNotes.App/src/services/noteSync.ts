@@ -135,8 +135,9 @@ export async function reconcile(
     return state;
   }
 
-  // The new head is metadata until its ciphertext is here.
-  await store.ensureNote(noteId);
+  // The new head is metadata until its ciphertext is here, and so is the version this editor has
+  // been working from - two chains, named rather than fetched as "the whole note" as this once was.
+  await store.ensureVersions([remoteHead, base]);
 
   const remoteText = store.materialise(remoteHead);
   const baseText = base ? store.materialise(base) : '';
@@ -158,6 +159,11 @@ export async function reconcile(
   // Merge against where the two branches diverged. `state.text` is "ours" whether it was saved or
   // not: on a fork, our own saved version is a branch the other side has never seen either.
   const ancestorId = base ? store.commonAncestor(base, remoteHead) : null;
+
+  // Asked for separately because there was no knowing which version it would be until the two
+  // branches were walked, and it can be far enough back to share no chain with either of them.
+  await store.ensureVersions([ancestorId]);
+
   const ancestorText = ancestorId ? store.materialise(ancestorId) : baseText;
   const merged = merge(ancestorText, state.text, remoteText);
 

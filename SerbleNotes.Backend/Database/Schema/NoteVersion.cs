@@ -39,9 +39,18 @@ public class NoteVersion {
     /// <summary>A manual restore point the user named, which is pinned and never pruned.</summary>
     public bool IsNamed { get; set; }
 
-    /// <summary>Base64 ciphertext. Big payloads move to S3 in a later iteration; MVP keeps them inline.</summary>
-    [Column(TypeName = "longtext")]
-    public string Payload { get; set; } = null!;
+    /// <summary>
+    /// The ciphertext itself. Big payloads move to S3 in a later iteration; MVP keeps them inline.
+    ///
+    /// Bytes rather than the base64 text this used to be. The wire is still base64 - JSON has no
+    /// other way to carry bytes, and System.Text.Json renders a byte[] as exactly that string - but
+    /// storing the encoded form cost a third more disk than the ciphertext it held, on far and away
+    /// the largest table here, and utf8mb4 made MySQL reserve four bytes per character of it
+    /// whenever a query needed a temporary table. Changing this after release would have meant
+    /// rebuilding that table.
+    /// </summary>
+    [Column(TypeName = "longblob")]
+    public byte[] Payload { get; set; } = null!;
 
     /// <summary>Encrypted label for a named restore point. The name is user text, so the server can't see it.</summary>
     [StringLength(512)]
@@ -51,6 +60,7 @@ public class NoteVersion {
     [StringLength(64)]
     public string? DeviceId { get; set; }
 
+    /// <summary>Length of <see cref="Payload"/> in bytes - the real cost of storing it.</summary>
     public int Size { get; set; }
 
     public long Cursor { get; set; }

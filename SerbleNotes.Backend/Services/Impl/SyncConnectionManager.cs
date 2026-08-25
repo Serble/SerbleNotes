@@ -77,6 +77,23 @@ public class SyncConnectionManager(ILogger<SyncConnectionManager> logger) {
             return;
         }
 
+        // Drop what has already gone before working out who is present, rather than discovering it
+        // while sending. `SendTo` removes a socket it finds closed, but by then the devices visited
+        // before it have already been handed a list with that socket in it - and since nothing
+        // broadcasts again on its own, a device that closed leaves a "open elsewhere" mark on
+        // another device that outlives it. Which devices got the stale list depended on the order a
+        // ConcurrentDictionary happened to enumerate in, so it went wrong intermittently.
+        foreach ((Guid connectionId, Connection connection) in sockets) {
+            if (connection.Socket.State != WebSocketState.Open) {
+                Remove(userId, connectionId);
+            }
+        }
+
+        // Removing the last one takes the user's whole bucket with it.
+        if (sockets.IsEmpty) {
+            return;
+        }
+
         foreach ((Guid connectionId, Connection connection) in sockets) {
             PresenceEntry[] others = sockets
                 .Where(other => other.Key != connectionId && other.Value.VaultId != null)

@@ -92,6 +92,43 @@ test('text with no trailing newline is read whole', () => {
   assert.equal(diff.removed, 1);
 });
 
+test('a one line change is a hunk header with no counts at all', () => {
+  // diffy writes "@@ -1 +1 @@" rather than "@@ -1,1 +1,1 @@" when a hunk is a single line, so the
+  // count is absent and has to be read as one. Taken as zero, the hunk ends before it starts and the
+  // change does not appear at all - and a one-line note is not an unusual thing to have.
+  const diff = changesBetween('a\n', 'b\n');
+  const hunk = diff.hunks[0];
+
+  assert.deepEqual(drawn('a\n', 'b\n'), ['r a', 'a b']);
+  assert.equal(hunk.oldLen, 1);
+  assert.equal(hunk.newLen, 1);
+  assert.equal(diff.added, 1);
+  assert.equal(diff.removed, 1);
+});
+
+test('an ordinary line does not claim to be missing a newline', () => {
+  // The flag is only ever set by diffy's marker. If every line carried it, the editor would draw the
+  // marker's meaning onto lines that never had it - and the one test that checks a line which really
+  // is missing its newline would still pass, which is how this went unnoticed.
+  const diff = changesBetween('one\ntwo\n', 'one\nTWO\n');
+
+  assert.ok(diff.hunks[0].lines.length > 0);
+  assert.ok(
+    diff.hunks[0].lines.every((line) => line.noNewline === false),
+    'a note that ends in a newline has no line missing one',
+  );
+});
+
+test('both sides of a change at the end of a note carry the marker', () => {
+  // diffy writes it after the removed line and again after the added one, so it is not only the last
+  // line of the hunk that has it.
+  const lines = changesBetween('one\ntwo', 'one\nTWO').hunks[0].lines;
+
+  assert.equal(lines.find((line) => line.kind === 'remove')!.noNewline, true);
+  assert.equal(lines.find((line) => line.kind === 'add')!.noNewline, true);
+  assert.equal(lines.find((line) => line.kind === 'context')!.noNewline, false);
+});
+
 test('a note that says it has no newline at the end is content', () => {
   const marker = '\\ No newline at end of file';
   assert.deepEqual(drawn('x\n', `x\n${marker}\n`), ['c x', `a ${marker}`]);

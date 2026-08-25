@@ -369,3 +369,51 @@ fn invalid_kdf_parameters_error_instead_of_panicking() {
     assert!(rewrap_vault_key(&wrapped, "pw", &salt, &fast_kdf(), "new", &KdfParams::new(0, 1, 1)).is_err());
     assert!(rewrap_vault_key(&wrapped, "pw", "not base64!!", &fast_kdf(), "new", &fast_kdf()).is_err());
 }
+
+/// The KDF parameters a new vault is created under.
+///
+/// Nothing else in this suite reads them: every other test builds its own deliberately-weak params
+/// so it runs in milliseconds, which means `recommended()` could return anything at all and the
+/// whole suite would still pass. It is the only thing standing between a vault password and someone
+/// with the wrapped blob, so what is pinned here is a floor rather than an exact number - the
+/// figures are meant to be raised, and a test that had to be edited every time they were would be
+/// deleted the second time.
+#[test]
+fn the_recommended_kdf_parameters_are_strong_enough_to_be_worth_using() {
+    let params = KdfParams::recommended();
+
+    // OWASP's floor for Argon2id is 19 MiB and 2 passes. Below this, deriving a key stops being
+    // meaningfully expensive and the wrapping is decoration.
+    assert!(
+        params.memory_kib() >= 19 * 1024,
+        "memory_kib was {}, which is below the point where Argon2id is worth running",
+        params.memory_kib()
+    );
+    assert!(params.iterations() >= 2, "iterations was {}", params.iterations());
+    assert!(params.parallelism() >= 1, "parallelism was {}", params.parallelism());
+}
+
+#[test]
+fn kdf_parameters_are_reported_as_they_were_given() {
+    // The three getters are how the parameters reach the server and come back, so a vault made today
+    // can be opened under the parameters it was made with. One that lied would seal a vault under
+    // settings nobody could reproduce - the blob would be intact and permanently unopenable.
+    let params = KdfParams::new(1234, 7, 2);
+
+    assert_eq!(params.memory_kib(), 1234);
+    assert_eq!(params.iterations(), 7);
+    assert_eq!(params.parallelism(), 2);
+}
+
+#[test]
+fn the_recommended_parameters_actually_derive_a_key_that_works() {
+    // Not just plausible numbers: Argon2 rejects some combinations outright, and a vault created
+    // with parameters that cannot derive would fail at the moment it was made.
+    let salt = generate_salt();
+    let key = derive_key("correct horse", &salt, &KdfParams::recommended()).unwrap();
+    let vault_key = generate_vault_key();
+    let wrapped = seal(&key, &vault_key).unwrap();
+
+    let again = derive_key("correct horse", &salt, &KdfParams::recommended()).unwrap();
+    assert_eq!(open(&again, &wrapped).unwrap(), vault_key);
+}

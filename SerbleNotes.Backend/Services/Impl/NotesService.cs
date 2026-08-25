@@ -10,9 +10,9 @@ public class NotesService(
     IVersionRepo versions,
     ISyncNotifier sync) : INotesService {
 
-    public async Task<Note> CreateNote(Vault vault, CreateNoteRequest request, string? deviceId) {
+    public async Task<Note> CreateNote(Vault vault, CreateNoteRequest request, byte[] payload, string? deviceId) {
         DateTime now = DateTime.UtcNow;
-        long cursor = await vaults.NextCursor(vault.Id);
+        long cursor = await vaults.NextCursor(vault.Id, payload.Length);
 
         Note note = new() {
             Id = request.Id,
@@ -28,7 +28,7 @@ public class NotesService(
         // The first version is always a full document: there is no parent to diff against.
         request.InitialVersion.IsSnapshot = true;
         request.InitialVersion.ParentId = null;
-        NoteVersion initial = BuildVersion(vault, note, request.InitialVersion, cursor, deviceId, now);
+        NoteVersion initial = BuildVersion(vault, note, request.InitialVersion, payload, cursor, deviceId, now);
         await versions.CreateVersion(initial);
 
         await sync.NotifyVaultChanged(
@@ -36,11 +36,12 @@ public class NotesService(
         return note;
     }
 
-    public async Task<NoteVersion> AppendVersion(Vault vault, Note note, CreateVersionRequest request, string? deviceId) {
+    public async Task<NoteVersion> AppendVersion(Vault vault, Note note, CreateVersionRequest request, byte[] payload,
+        string? deviceId) {
         DateTime now = DateTime.UtcNow;
-        long cursor = await vaults.NextCursor(vault.Id);
+        long cursor = await vaults.NextCursor(vault.Id, payload.Length);
 
-        NoteVersion version = BuildVersion(vault, note, request, cursor, deviceId, now);
+        NoteVersion version = BuildVersion(vault, note, request, payload, cursor, deviceId, now);
         await versions.CreateVersion(version);
 
         // Deliberately not rejecting a parent that isn't the current head. Two devices editing offline
@@ -72,17 +73,19 @@ public class NotesService(
         long cursor = await vaults.NextCursor(vault.Id);
 
         // Tombstone rather than delete: the version history is the product, and offline clients need
-        // something to sync against to learn the note is gone.
-        note.Deleted = true;
+        // something to sync against to learn the note is gone. Nothing is freed, so the vault's
+        // storage total does not move - the note's history is all still there.
+        DateTime now = DateTime.UtcNow;
+        note.DeletedAt = now;
         note.Cursor = cursor;
-        note.UpdatedAt = DateTime.UtcNow;
+        note.UpdatedAt = now;
         await notes.UpdateNote(note);
 
         await sync.NotifyVaultChanged(vault.OwnerId, vault.Id, cursor, deviceId, [note], []);
     }
 
-    private static NoteVersion BuildVersion(Vault vault, Note note, CreateVersionRequest request, long cursor,
-        string? deviceId, DateTime now) {
+    private static NoteVersion BuildVersion(Vault vault, Note note, CreateVersionRequest request, byte[] payload,
+        long cursor, string? deviceId, DateTime now) {
         return new NoteVersion {
             Id = request.Id,
             NoteId = note.Id,
@@ -91,10 +94,10 @@ public class NotesService(
             MergeParentId = request.MergeParentId,
             IsSnapshot = request.IsSnapshot,
             IsNamed = request.IsNamed,
-            Payload = request.Payload,
+            Payload = payload,
             Label = request.Label,
             DeviceId = deviceId,
-            Size = request.Payload.Length,
+            Size = payload.Length,
             Cursor = cursor,
             CreatedAt = now
         };

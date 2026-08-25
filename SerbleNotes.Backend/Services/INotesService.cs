@@ -9,7 +9,12 @@ namespace SerbleNotes.Backend.Services;
 /// cursor and end up invisible to sync.
 /// </summary>
 public interface INotesService {
-    Task<Note> CreateNote(Vault vault, CreateNoteRequest request, string? deviceId);
+    /// <param name="payload">
+    /// The initial version's ciphertext, already decoded from the base64 the request carried. The
+    /// controller decodes it because that is where a malformed one becomes a 400 rather than an
+    /// exception, and it is the length the limit checks are made against.
+    /// </param>
+    Task<Note> CreateNote(Vault vault, CreateNoteRequest request, byte[] payload, string? deviceId);
 
     /// <summary>
     /// Changes a note's sealed name. Deliberately not a new version: a rename is a metadata change,
@@ -17,6 +22,7 @@ public interface INotesService {
     /// than where it was filed.
     /// </summary>
     Task RenameNote(Vault vault, Note note, string sealedName, string? deviceId);
-    Task<NoteVersion> AppendVersion(Vault vault, Note note, CreateVersionRequest request, string? deviceId);
+    Task<NoteVersion> AppendVersion(Vault vault, Note note, CreateVersionRequest request, byte[] payload,
+        string? deviceId);
     Task DeleteNote(Vault vault, Note note, string? deviceId);
 }

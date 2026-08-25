@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "The client's tests are node's own runner rather than one Stryker has a plugin for, so the command runner is the only option - and it has no per-test coverage analysis, meaning it reruns the whole command for every single mutant. scripts/mutation-tests.sh is that command; set STRYKER_TESTS to narrow a run to the tests that could kill the mutants being made. See the mutation testing section of CLAUDE.md.",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "./scripts/mutation-tests.sh"
+  },
+  "reporters": [
+    "progress",
+    "clear-text",
+    "json"
+  ],
+  "coverageAnalysis": "off",
+  "concurrency": 6,
+  "timeoutMS": 60000,
+  "mutate": [
+    "src/services/store.ts",
+    "src/services/noteSync.ts",
+    "src/services/diff.ts",
+    "src/components/tableFormat.ts",
+    "src/components/cssScope.ts"
+  ],
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": 0
+  },
+  "ignorePatterns": [
+    "src-tauri/target",
+    "src-tauri/gen",
+    "dist",
+    ".stryker-tmp",
+    "reports",
+    "icon-build"
+  ],
+  "_ignoreComment": "Stryker copies the project into a sandbox before mutating it. This one contains a Tauri app, so src-tauri/target is 9 GB of Rust build artifacts and src-tauri/gen another 1.2 GB - copying them made a run of any size take minutes per mutant, whatever it was mutating. None of it is reachable from the client's tests."
+}

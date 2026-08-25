@@ -12,15 +12,23 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
+# The directories are skipped by grep rather than filtered out of its results afterwards. Reading
+# them and then throwing the lines away meant scanning every .ts and .json under node_modules on
+# every run, and the mutation testing tools add a whole second copy of the project on top of that -
+# it went from slow to slower than anyone will wait for.
 matches=$(grep -rnP '[^\x00-\x7F]' \
     --include="*.cs" --include="*.rs" --include="*.ts" --include="*.tsx" \
     --include="*.css" --include="*.html" --include="*.md" --include="*.json" \
     --include="*.toml" --include="*.yml" --include="*.yaml" --include="*.py" \
     --include="*.svg" \
     --include="*.sh" --include=".gitignore" \
+    --exclude-dir=node_modules --exclude-dir=target --exclude-dir=pkg \
+    --exclude-dir=wwwroot --exclude-dir=obj --exclude-dir=bin --exclude-dir=Migrations \
+    --exclude-dir=.git --exclude-dir=.claude --exclude-dir=.idea \
+    --exclude-dir=.stryker-tmp --exclude-dir=StrykerOutput --exclude-dir=mutants.out \
+    --exclude-dir=mutants.out.old --exclude-dir=reports \
+    --exclude=package-lock.json --exclude=Cargo.lock \
     . 2>/dev/null \
-  | grep -vE '/(node_modules|target|pkg|wwwroot|obj|bin|Migrations|\.git|\.claude|\.idea)/' \
-  | grep -vE 'package-lock\.json|Cargo\.lock' \
   | grep -vE '^\./SerbleNotes\.App/src-tauri/gen/' \
   | grep -vE '^\./SerbleNotes\.Core/tests/')
 

@@ -7,8 +7,9 @@ name: Clients
 # Windows machine. Linux and Android build fine locally; they are here so a tagged release produces
 # all of them at once, from the same commit.
 #
-# VITE_SERBLE_APP_ID has to be set as a repository variable, or the built apps have no OAuth client
-# id and cannot sign in. It is not a secret - it is in the URL every sign-in goes through.
+# VITE_API_BASE_URL has to be set as a repository variable: a packaged app is not served by the
+# backend, so it has nowhere to look for it. The Serble application id comes from that server once
+# the app can reach it, so there is nothing else to configure here.
 
 on:
   workflow_dispatch:
@@ -64,7 +65,6 @@ jobs:
       - name: Build
         working-directory: SerbleNotes.App
         env:
-          VITE_SERBLE_APP_ID: ${{ vars.VITE_SERBLE_APP_ID }}
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: npx tauri build
 
@@ -125,7 +125,6 @@ jobs:
         working-directory: SerbleNotes.App
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
-          VITE_SERBLE_APP_ID: ${{ vars.VITE_SERBLE_APP_ID }}
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: npx tauri android build --apk --debug
 

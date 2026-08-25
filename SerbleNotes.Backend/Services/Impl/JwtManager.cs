@@ -19,6 +19,9 @@ public class JwtManager(IOptions<JwtSettings> settings) : IJwtManager {
                 new Claim(ClaimTypes.NameIdentifier, user.Id),
                 new Claim(ClaimTypes.Name, user.Username)
             ]),
+            // Set explicitly rather than left to the handler: the issue time is what a revocation
+            // is measured against, so it has to be there and it has to be the value being compared.
+            IssuedAt = DateTime.UtcNow,
             Expires = DateTime.UtcNow.AddHours(_settings.ExpiryHours),
             Issuer = _settings.Issuer,
             Audience = _settings.Audience,

@@ -17,8 +17,8 @@ export interface Vault {
 export interface Note {
   id: string;
   vaultId: string;
-  /** Sealed name including folder path. Null on notes written before names existed. */
-  name: string | null;
+  /** Sealed name including folder path. */
+  name: string;
   headVersionId: string | null;
   cursor: number;
   createdAt: string;
@@ -46,6 +46,15 @@ export interface NoteVersion {
   size: number;
   cursor: number;
   createdAt: string;
+}
+
+/**
+ * What the server tells a client before it has a session - today just the Serble application id the
+ * sign-in URL is built from. See the backend's ConfigController.
+ */
+export interface ClientConfig {
+  /** OAuth `client_id` for this deployment. Empty when the server has not been configured with one. */
+  serbleAppId: string;
 }
 
 export interface ChangesResponse {

@@ -533,3 +533,55 @@ fn a_clean_merge_does_not_gain_a_trailing_newline() {
     assert_eq!(outcome.text(), "one CHANGED\ntwo\nthree CHANGED");
     assert!(!outcome.text().ends_with('\n'));
 }
+
+/// A side that deleted everything must stay a deletion.
+///
+/// `merge3` pads every side with a trailing newline before re-merging a conflict, because `diffy`
+/// welds its markers onto a section that does not end in one. An empty side is the case that padding
+/// must leave alone: "" is not a document missing its newline, it is a document with nothing in it,
+/// and turning it into "\n" makes a deletion come back as a blank line. Nobody typed that line, and
+/// on the clean path it would be written into the note by the next autosave.
+#[test]
+fn padding_a_conflict_does_not_turn_a_deletion_into_a_blank_line() {
+    let ancestor = "one\ntwo\nthree";
+
+    // One side deletes the lot; the other rewrites it, so the two cannot be reconciled and the
+    // padding path is the one that runs.
+    let outcome = merge3(ancestor, "", "one CHANGED\ntwo CHANGED\nthree CHANGED");
+
+    // Whatever comes out, the empty side must have contributed no lines at all. Counted rather than
+    // trimmed: a section holding one empty line trims to nothing, which is precisely the difference
+    // between "this version deleted it" and "this version left a blank line here".
+    if outcome.conflicted() {
+        let text = outcome.text();
+        let ours_section: Vec<&str> = text
+            .lines()
+            .skip_while(|line| !line.starts_with("<<<<<<<"))
+            .skip(1)
+            .take_while(|line| !line.starts_with("|||||||") && !line.starts_with("======="))
+            .collect();
+        assert!(
+            ours_section.is_empty(),
+            "the side that deleted everything came back holding {ours_section:?}"
+        );
+    } else {
+        assert_eq!(outcome.text(), "one CHANGED\ntwo CHANGED\nthree CHANGED");
+    }
+}
+
+#[test]
+fn merging_two_empty_documents_produces_an_empty_one() {
+    // Not a blank line, and not a newline nobody typed.
+    let outcome = merge3("", "", "");
+
+    assert!(!outcome.conflicted());
+    assert_eq!(outcome.text(), "");
+}
+
+#[test]
+fn deleting_everything_on_one_side_alone_is_a_clean_deletion() {
+    let outcome = merge3("one\ntwo\nthree", "", "one\ntwo\nthree");
+
+    assert!(!outcome.conflicted());
+    assert_eq!(outcome.text(), "", "an untouched other side must not resurrect the note");
+}

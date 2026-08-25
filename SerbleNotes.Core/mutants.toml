@@ -1,0 +1,13 @@
+# cargo-mutants: does the core's suite actually notice when the core is wrong?
+#
+# This crate is the one place a regression is unrecoverable - it holds the only copy of the logic
+# that turns stored bytes back into someone's notes, and the server only ever had ciphertext. A test
+# suite here is worth exactly what it catches, which is the question this answers.
+#
+# `lib.rs` is the wasm-bindgen surface: thin wrappers that hand arguments to the modules below and
+# cannot be reached from `cargo test` at all, so mutating them only produces unviable noise.
+exclude_globs = ["src/lib.rs"]
+
+# The suite is about 25s; a mutant that makes it hang is a mutant, not a timeout.
+timeout_multiplier = 4.0
+minimum_test_timeout = 120

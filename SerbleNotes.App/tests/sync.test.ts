@@ -70,7 +70,7 @@ test('a pull brings metadata only - the ciphertext is left on the server', async
   const fresh = new Device(newVault(), key);
   await fresh.pull();
 
-  assert.equal(fresh.store.hasBodies(note.id), false);
+  assert.equal(fresh.store.hasChain(fresh.store.headOf(note.id)), false);
   assert.throws(() => fresh.store.textOf(note.id), /still downloading/);
 });
 
@@ -114,7 +114,7 @@ test('a metadata pull does not destroy ciphertext the device already holds', asy
   const { pc, phone, note } = await twoDevices();
 
   // The phone has the bodies for this note.
-  assert.equal(phone.store.hasBodies(note.id), true);
+  assert.equal(phone.store.hasChain(phone.store.headOf(note.id)), true);
   const text = phone.store.textOf(note.id);
 
   // The computer writes; the phone pulls metadata, which describes versions with `payload: null`.
@@ -160,20 +160,21 @@ test('two callers opening the same note at once make one request', async () => {
 
   const fresh = new Device(newVault(), key);
   await fresh.pull();
-  calls.noteVersions = 0;
+  calls.noteVersionsByIds = 0;
 
   await Promise.all([fresh.ensureNote(note.id), fresh.ensureNote(note.id), fresh.ensureNote(note.id)]);
 
-  assert.equal(calls.noteVersions, 1);
+  assert.equal(calls.noteVersionsByIds, 1);
 });
 
 test('ensureNote is a no-op once the bodies are here', async () => {
   const { phone, note } = await twoDevices();
   calls.noteVersions = 0;
+  calls.noteVersionsByIds = 0;
 
   await phone.ensureNote(note.id);
 
-  assert.equal(calls.noteVersions, 0);
+  assert.equal(calls.noteVersions + calls.noteVersionsByIds, 0);
 });
 
 test('a missing body throws rather than reading as empty', async () => {
@@ -282,6 +283,110 @@ test('the snapshot cadence bounds the replay chain', async () => {
   assert.ok(worst <= 10, `longest diff chain was ${worst}`);
 });
 
+test('opening a note downloads its chain, not its history', async () => {
+  const { pc, note } = await twoDevices('0\n');
+
+  // A long session, so "the whole history" and "enough to open it" are very different amounts.
+  for (let i = 1; i <= 40; i += 1) {
+    pc.type(`${pc.editor.text}${i}\n`);
+    await pc.autosave();
+  }
+
+  const fresh = new Device(newVault(), key, 'fresh');
+  await fresh.pull();
+  calls.versionIdsFetched.length = 0;
+  calls.noteVersions = 0;
+
+  await fresh.ensureNote(note.id);
+
+  const stored = serverState.versionsOf(note.id).length;
+  assert.ok(stored > 20, `the history should be long for this to mean anything, was ${stored}`);
+  assert.equal(calls.noteVersions, 0, 'it never asked for the whole note');
+
+  // At most a snapshot plus the diffs after it - the same bound `SNAPSHOT_EVERY` puts on a replay.
+  assert.ok(
+    calls.versionIdsFetched.length <= 11,
+    `fetched ${calls.versionIdsFetched.length} versions to open one note`,
+  );
+  assert.ok(calls.versionIdsFetched.length < stored, 'and fewer than the history holds');
+
+  assert.equal(fresh.store.textOf(note.id), pc.editor.text, 'and the note still opens correctly');
+});
+
+test('every version it downloaded is one the replay actually reads', async () => {
+  const { pc, note } = await twoDevices('0\n');
+
+  for (let i = 1; i <= 25; i += 1) {
+    pc.type(`${pc.editor.text}${i}\n`);
+    await pc.autosave();
+  }
+
+  const fresh = new Device(newVault(), key, 'fresh');
+  await fresh.pull();
+  calls.versionIdsFetched.length = 0;
+  await fresh.ensureNote(note.id);
+
+  // Walk the chain the way `materialise` does and check the two lists are the same set. A fetch
+  // that brought anything else is downloading bytes it will not read; one that brought less would
+  // have thrown above.
+  const known = new Map(fresh.store.historyOf(note.id).map((version) => [version.id, version]));
+  const walked: string[] = [];
+  let current = known.get(fresh.store.headOf(note.id)!);
+  while (current && !current.isSnapshot) {
+    walked.push(current.id);
+    current = current.parentId ? known.get(current.parentId) : undefined;
+  }
+  assert.ok(current, 'the chain reached a snapshot');
+  walked.push(current!.id);
+
+  assert.deepEqual([...calls.versionIdsFetched].sort(), walked.sort());
+});
+
+test('reading an old version fetches only what that version needs', async () => {
+  const { pc, note } = await twoDevices('0\n');
+
+  for (let i = 1; i <= 30; i += 1) {
+    pc.type(`${pc.editor.text}${i}\n`);
+    await pc.autosave();
+  }
+
+  const fresh = new Device(newVault(), key, 'fresh');
+  await fresh.pull();
+  await fresh.ensureNote(note.id);
+
+  // The oldest version, which the head's chain cannot have reached.
+  const oldest = fresh.store.historyOf(note.id).at(-1)!;
+  assert.throws(() => fresh.store.materialise(oldest.id), /still downloading/);
+
+  calls.versionIdsFetched.length = 0;
+  calls.noteVersions = 0;
+  await fresh.ensureVersions([oldest.id]);
+
+  assert.equal(calls.noteVersions, 0, 'still not the whole note');
+  assert.ok(calls.versionIdsFetched.length <= 11, 'just that version\'s own chain');
+  assert.doesNotThrow(() => fresh.store.materialise(oldest.id));
+});
+
+test('a version already on the device is not fetched again', async () => {
+  const { pc, note } = await twoDevices('0\n');
+
+  for (let i = 1; i <= 15; i += 1) {
+    pc.type(`${pc.editor.text}${i}\n`);
+    await pc.autosave();
+  }
+
+  const fresh = new Device(newVault(), key, 'fresh');
+  await fresh.pull();
+  await fresh.ensureNote(note.id);
+
+  calls.versionIdsFetched.length = 0;
+  calls.noteVersionsByIds = 0;
+  await fresh.ensureNote(note.id);
+
+  assert.equal(calls.noteVersionsByIds, 0, 'nothing was missing, so nothing was asked for');
+  assert.deepEqual(calls.versionIdsFetched, []);
+});
+
 test('another device can read every version of a session it did not write', async () => {
   const { pc, phone, note } = await twoDevices('0\n');
 
@@ -293,7 +398,7 @@ test('another device can read every version of a session it did not write', asyn
   }
 
   await phone.pull();
-  await phone.ensureNote(note.id);
+  await phone.ensureHistory(note.id);
 
   const history = phone.store.historyOf(note.id).reverse();
   history.forEach((version, index) => {

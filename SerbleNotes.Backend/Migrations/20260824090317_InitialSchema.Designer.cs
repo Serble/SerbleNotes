@@ -12,8 +12,8 @@ using SerbleNotes.Backend.Database;
 namespace SerbleNotes.Backend.Migrations
 {
     [DbContext(typeof(NotesDatabaseContext))]
-    [Migration("20260821105142_AddEncryptedNoteName")]
-    partial class AddEncryptedNoteName
+    [Migration("20260824090317_InitialSchema")]
+    partial class InitialSchema
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -37,14 +37,15 @@ namespace SerbleNotes.Backend.Migrations
                     b.Property<long>("Cursor")
                         .HasColumnType("bigint");
 
-                    b.Property<bool>("Deleted")
-                        .HasColumnType("tinyint(1)");
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<string>("HeadVersionId")
                         .HasMaxLength(36)
                         .HasColumnType("varchar(36)");
 
                     b.Property<string>("Name")
+                        .IsRequired()
                         .HasMaxLength(2048)
                         .HasColumnType("varchar(2048)");
 
@@ -102,9 +103,9 @@ namespace SerbleNotes.Backend.Migrations
                         .HasMaxLength(36)
                         .HasColumnType("varchar(36)");
 
-                    b.Property<string>("Payload")
+                    b.Property<byte[]>("Payload")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasColumnType("longblob");
 
                     b.Property<int>("Size")
                         .HasColumnType("int");
@@ -116,9 +117,9 @@ namespace SerbleNotes.Backend.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("NoteId");
-
                     b.HasIndex("ParentId");
+
+                    b.HasIndex("NoteId", "Cursor");
 
                     b.HasIndex("VaultId", "Cursor");
 
@@ -145,6 +146,9 @@ namespace SerbleNotes.Backend.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("varchar(512)");
 
+                    b.Property<DateTime?>("TokensValidAfter")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<string>("Username")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -167,19 +171,11 @@ namespace SerbleNotes.Backend.Migrations
                     b.Property<long>("Cursor")
                         .HasColumnType("bigint");
 
-                    b.Property<bool>("Deleted")
-                        .HasColumnType("tinyint(1)");
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<bool>("Encrypted")
                         .HasColumnType("tinyint(1)");
-
-                    b.Property<string>("KdfParams")
-                        .HasMaxLength(256)
-                        .HasColumnType("varchar(256)");
-
-                    b.Property<string>("KdfSalt")
-                        .HasMaxLength(64)
-                        .HasColumnType("varchar(64)");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -191,19 +187,50 @@ namespace SerbleNotes.Backend.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("varchar(64)");
 
+                    b.Property<long>("StorageBytes")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime(6)");
-
-                    b.Property<string>("WrappedKey")
-                        .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("varchar(512)");
 
                     b.HasKey("Id");
 
                     b.HasIndex("OwnerId");
 
                     b.ToTable("Vaults");
+                });
+
+            modelBuilder.Entity("SerbleNotes.Backend.Database.Schema.VaultKey", b =>
+                {
+                    b.Property<string>("VaultId")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)");
+
+                    b.Property<string>("UserId")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("KdfParams")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<string>("KdfSalt")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("WrappedKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)");
+
+                    b.HasKey("VaultId", "UserId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("VaultKeys");
                 });
 
             modelBuilder.Entity("SerbleNotes.Backend.Database.Schema.Note", b =>
@@ -237,6 +264,25 @@ namespace SerbleNotes.Backend.Migrations
                         .IsRequired();
 
                     b.Navigation("OwnerNavigation");
+                });
+
+            modelBuilder.Entity("SerbleNotes.Backend.Database.Schema.VaultKey", b =>
+                {
+                    b.HasOne("SerbleNotes.Backend.Database.Schema.NotesUser", "UserNavigation")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SerbleNotes.Backend.Database.Schema.Vault", "VaultNavigation")
+                        .WithMany()
+                        .HasForeignKey("VaultId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("UserNavigation");
+
+                    b.Navigation("VaultNavigation");
                 });
 #pragma warning restore 612, 618
         }

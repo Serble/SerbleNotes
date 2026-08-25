@@ -16,7 +16,8 @@
     "android": "tauri android dev",
     "android:build": "tauri android build",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives",
-    "test": "node --experimental-transform-types --import ./tests/support/register.mjs --test 'tests/*.test.ts'"
+    "test": "node --experimental-transform-types --import ./tests/support/register.mjs --test 'tests/*.test.ts'",
+    "test:mutants": "SERBLENOTES_CORE_PKG=\"$PWD/../SerbleNotes.Core/pkg\" STRYKER_TESTS=tests/diff.test.ts stryker run --mutate src/services/diff.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -52,6 +53,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

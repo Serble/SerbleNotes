@@ -21,7 +21,13 @@
  */
 import { fileURLToPath } from 'node:url';
 
-const CORE = fileURLToPath(new URL('../../../SerbleNotes.Core/pkg/serblenotes_core.js', import.meta.url));
+// Normally the crate is found relative to this file. Under mutation testing it cannot be: Stryker
+// runs the tests from a copy of SerbleNotes.App placed inside a temp directory, so "three levels up"
+// lands somewhere with no crate in it. SERBLENOTES_CORE_PKG is how that run says where the real one
+// is; nothing else sets it, and the relative path stays the answer for every ordinary `npm test`.
+const CORE = process.env.SERBLENOTES_CORE_PKG
+  ? `${process.env.SERBLENOTES_CORE_PKG}/serblenotes_core.js`
+  : fileURLToPath(new URL('../../../SerbleNotes.Core/pkg/serblenotes_core.js', import.meta.url));
 const FAKE_SERVER = fileURLToPath(new URL('./fakeServer.ts', import.meta.url));
 const SRC = fileURLToPath(new URL('../../src/', import.meta.url));
 

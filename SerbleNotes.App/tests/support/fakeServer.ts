@@ -30,7 +30,17 @@ let clock = 0;
 let offline = false;
 
 /** Every request the fake has answered, so a test can assert that two callers made one call. */
-export const calls = { changes: 0, noteVersions: 0, createNote: 0, createVersion: 0, rename: 0, delete: 0 };
+export const calls = {
+  changes: 0,
+  noteVersions: 0,
+  noteVersionsByIds: 0,
+  /** Version ids named across every by-ids call, so a test can assert what was *not* downloaded. */
+  versionIdsFetched: [] as string[],
+  createNote: 0,
+  createVersion: 0,
+  rename: 0,
+  delete: 0,
+};
 
 /**
  * Timestamps are counted rather than read from the wall clock. A vault's whole life happens inside
@@ -59,8 +69,11 @@ export function resetServer(): void {
   cursor = 0;
   clock = 0;
   offline = false;
+  calls.versionIdsFetched.length = 0;
   for (const key of Object.keys(calls) as (keyof typeof calls)[]) {
-    calls[key] = 0;
+    if (typeof calls[key] === 'number') {
+      (calls as Record<string, number>)[key] = 0;
+    }
   }
 }
 
@@ -233,6 +246,22 @@ export const api = {
     reachable();
     calls.noteVersions += 1;
     return [...versions.values()].filter((v) => v.noteId === noteId).map((v) => ({ ...v }));
+  },
+
+  /**
+   * NotesController.GetVersions with `ids`. Scoped to the note like the real one, so an id belonging
+   * to another note is absent from the answer rather than an error - a test that expects otherwise
+   * is testing something the server does not do.
+   */
+  noteVersionsByIds: async (noteId: string, ids: string[]): Promise<NoteVersion[]> => {
+    reachable();
+    calls.noteVersionsByIds += 1;
+    calls.versionIdsFetched.push(...ids);
+
+    const wanted = new Set(ids);
+    return [...versions.values()]
+      .filter((v) => v.noteId === noteId && wanted.has(v.id))
+      .map((v) => ({ ...v }));
   },
 
   renameNote: async (id: string, sealedName: string): Promise<Note> => {

@@ -31,6 +31,15 @@ const SNAPSHOT_EVERY = 10;
 /** How many note bodies to fetch at once when something genuinely needs all of them. */
 const ENSURE_CONCURRENCY = 6;
 
+/**
+ * How many version ids to name in one request.
+ *
+ * A chain is `SNAPSHOT_EVERY` long in the ordinary case, so this is never reached by opening a note.
+ * It is here because the ids travel in the URL, and a history that somehow has no snapshot for a
+ * long way back would otherwise build a request too long to send. The server refuses more than 200.
+ */
+const IDS_PER_REQUEST = 40;
+
 const EMPTY_FOLDER_KEY = 'serblenotes.emptyFolders.';
 
 /**
@@ -114,16 +123,20 @@ export class VaultStore {
    * entry. `tree()` asks for every note's path and the workspace re-renders on every keystroke, so
    * without this the vault's names are decrypted a few hundred times a second while someone types.
    */
-  private paths = new Map<string, { sealed: string | null; path: string }>();
+  private paths = new Map<string, { sealed: string; path: string }>();
 
   /** Bumped by anything that changes what the tree would draw, so the tree can be reused. */
   private revision = 0;
   private treeCache: { revision: number; nodes: TreeNode[] } | null = null;
 
-  /** Version ids by note, so "does this note have its bodies" is not a scan of the whole vault. */
+  /** Version ids by note, so a note's own versions are not a scan of the whole vault. */
   private versionsByNote = new Map<string, Set<string>>();
 
-  /** In-flight body fetches, so two things opening the same note make one request. */
+  /**
+   * In-flight body fetches, keyed by the version whose ciphertext they will bring - so two things
+   * wanting the same version wait on one request rather than asking twice. A whole-note fallback is
+   * keyed by `note:<id>` in the same map, because it is the same promise to anybody waiting.
+   */
   private bodyRequests = new Map<string, Promise<void>>();
 
   /** Told when something arrives in the background, so the UI can redraw. Set by the workspace. */
@@ -193,10 +206,6 @@ export class VaultStore {
       versions: changes.versions.map((version) => this.versions.get(version.id) ?? version),
       cursor: this.cursor,
     });
-
-    // A note written before names existed is titled from its first line, which needs its body. They
-    // are rare and legacy, so they are fetched in the background rather than held against the open.
-    void this.loadUnnamedTitles();
   }
 
   /**
@@ -275,25 +284,111 @@ export class VaultStore {
   }
 
   /**
-   * Makes sure every byte of a note's history is on this device.
+   * The versions whose ciphertext is needed to rebuild one version: itself, then back along the
+   * parent chain to the nearest snapshot.
    *
-   * Everything that turns a version into text goes through here first. `materialise` refuses to
-   * work from a version it does not hold rather than inventing one, so the guarantee this method
-   * provides is what keeps that refusal from ever being seen: an editor that opened an empty
-   * document over a note that exists would be overwritten by the next autosave.
+   * This is the same walk `materialise` does, and that is the point of it - asking for exactly what
+   * that walk will read means never downloading a byte it will not. It is answerable from metadata
+   * alone, which this device already has for every version in the vault: opening a vault pulls every
+   * parent pointer and snapshot flag with no payloads attached.
+   *
+   * Null means the walk could not be finished - a parent whose metadata never arrived, or a history
+   * with no snapshot at the bottom. The caller falls back to fetching the note whole rather than
+   * guessing at a shorter answer, because a chain read one version short rebuilds the wrong document.
    */
-  async ensureNote(noteId: string): Promise<void> {
-    if (this.hasBodies(noteId)) {
-      return;
+  private chainFrom(versionId: string): string[] | null {
+    const chain: string[] = [];
+    let current = this.versions.get(versionId);
+
+    while (current && !current.isSnapshot) {
+      chain.push(current.id);
+      current = current.parentId ? this.versions.get(current.parentId) : undefined;
     }
 
-    const existing = this.bodyRequests.get(noteId);
-    if (existing) {
-      return existing;
+    if (!current) {
+      return null;
     }
 
+    chain.push(current.id);
+    return chain;
+  }
+
+  /**
+   * Makes sure these versions can be rebuilt on this device, downloading only what is missing.
+   *
+   * Everything that turns a version into text goes through here first. `materialise` refuses to work
+   * from a version it does not hold rather than inventing one, so the guarantee this provides is what
+   * keeps that refusal from being seen: an editor that opened an empty document over a note that
+   * exists would be overwritten by the next autosave.
+   *
+   * Nulls are accepted and ignored, because most callers are passing a head or a parent that may not
+   * exist and would otherwise all write the same check.
+   */
+  async ensureVersions(versionIds: (string | null | undefined)[]): Promise<void> {
+    const wanted = new Set<string>();
+    const wholeNotes = new Set<string>();
+
+    for (const versionId of versionIds) {
+      if (!versionId) {
+        continue;
+      }
+
+      const version = this.versions.get(versionId);
+      if (!version) {
+        // Not a version this device has ever heard of. Nothing can be fetched for it and nothing
+        // should be guessed; `materialise` says so plainly if anybody goes on to ask for it.
+        continue;
+      }
+
+      const chain = this.chainFrom(versionId);
+      if (chain === null) {
+        wholeNotes.add(version.noteId);
+        continue;
+      }
+
+      for (const id of chain) {
+        if (this.versions.get(id)?.payload == null) {
+          wanted.add(id);
+        }
+      }
+    }
+
+    const work: Promise<void>[] = [];
+
+    for (const noteId of wholeNotes) {
+      work.push(this.fetch(`note:${noteId}`, () => api.noteVersions(noteId)));
+    }
+
+    // Anything already being fetched is waited on rather than asked for again, so two panels opening
+    // the same version make one request. Grouped by note, because a request names one note's ids and
+    // a caller may well have asked about versions of several.
+    const outstanding = new Map<string, string[]>();
+    for (const id of wanted) {
+      const inFlight = this.bodyRequests.get(id);
+      if (inFlight) {
+        work.push(inFlight);
+        continue;
+      }
+
+      const noteId = this.versions.get(id)!.noteId;
+      const forNote = outstanding.get(noteId) ?? [];
+      forNote.push(id);
+      outstanding.set(noteId, forNote);
+    }
+
+    for (const [noteId, ids] of outstanding) {
+      for (let at = 0; at < ids.length; at += IDS_PER_REQUEST) {
+        work.push(this.fetchBatch(noteId, ids.slice(at, at + IDS_PER_REQUEST)));
+      }
+    }
+
+    await Promise.all(work);
+  }
+
+  /** One request for a batch of a note's versions, registered against every id it will bring. */
+  private async fetchBatch(noteId: string, ids: string[]): Promise<void> {
     const request = (async () => {
-      const versions = await api.noteVersions(noteId);
+      const versions = await api.noteVersionsByIds(noteId, ids);
       for (const version of versions) {
         this.mergeVersion(version);
       }
@@ -303,23 +398,59 @@ export class VaultStore {
       await writeChanges(this.vault.id, { versions });
     })();
 
-    this.bodyRequests.set(noteId, request);
+    for (const id of ids) {
+      this.bodyRequests.set(id, request);
+    }
 
     try {
       await request;
     } finally {
-      this.bodyRequests.delete(noteId);
+      for (const id of ids) {
+        this.bodyRequests.delete(id);
+      }
     }
   }
 
-  /** Whether this device holds the ciphertext for all of a note's known versions. */
-  hasBodies(noteId: string): boolean {
-    for (const versionId of this.versionsByNote.get(noteId) ?? []) {
-      if (this.versions.get(versionId)?.payload == null) {
-        return false;
-      }
+  /** Makes sure a note's current text can be rebuilt. */
+  ensureNote(noteId: string): Promise<void> {
+    return this.ensureVersions([this.headOf(noteId)]);
+  }
+
+  /** Runs one body fetch under a key, keeping it in `bodyRequests` for anyone else who wants it. */
+  private async fetch(key: string, get: () => Promise<NoteVersion[]>): Promise<void> {
+    const existing = this.bodyRequests.get(key);
+    if (existing) {
+      return existing;
     }
-    return true;
+
+    const request = (async () => {
+      const versions = await get();
+      for (const version of versions) {
+        this.mergeVersion(version);
+      }
+
+      // No cursor: these rows are already accounted for by the metadata pull that named them, and
+      // moving the cursor for a body fetch would claim to have seen changes this device has not.
+      await writeChanges(this.vault.id, { versions });
+    })();
+
+    this.bodyRequests.set(key, request);
+
+    try {
+      await request;
+    } finally {
+      this.bodyRequests.delete(key);
+    }
+  }
+
+  /** Whether a version can be rebuilt from what this device holds, without asking the network. */
+  hasChain(versionId: string | null): boolean {
+    if (!versionId) {
+      return true;
+    }
+
+    const chain = this.chainFrom(versionId);
+    return chain !== null && chain.every((id) => this.versions.get(id)?.payload != null);
   }
 
   /**
@@ -351,24 +482,6 @@ export class VaultStore {
     await Promise.all(
       Array.from({ length: Math.min(ENSURE_CONCURRENCY, notes.length) }, () => worker()),
     );
-  }
-
-  private async loadUnnamedTitles(): Promise<void> {
-    const unnamed = this.listNotes().filter((note) => !note.name && !this.hasBodies(note.id));
-    if (unnamed.length === 0) {
-      return;
-    }
-
-    for (const note of unnamed) {
-      try {
-        await this.ensureNote(note.id);
-      } catch {
-        // It keeps its fallback title. Nothing else depends on this having worked.
-      }
-    }
-
-    this.bump();
-    this.onChanged?.();
   }
 
   listNotes(): Note[] {
@@ -432,10 +545,7 @@ export class VaultStore {
     return head ? this.materialise(head) : '';
   }
 
-  /**
-   * A note's full path, decrypted. Notes written before names existed fall back to their first line,
-   * which is what used to stand in for a title.
-   */
+  /** A note's full path, decrypted. */
   pathOf(noteId: string): string {
     const note = this.notes.get(noteId);
     if (!note) {
@@ -445,22 +555,21 @@ export class VaultStore {
     // Keyed on the sealed name rather than on a revision counter: a rename replaces that string, so
     // an entry can never outlive the name it was decrypted from.
     const cached = this.paths.get(noteId);
-    if (cached && cached.sealed === note.name && note.name !== null) {
+    if (cached && cached.sealed === note.name) {
       return cached.path;
     }
 
-    if (note.name) {
-      let path: string;
-      try {
-        path = open(this.key, note.name);
-      } catch {
-        path = 'Unreadable name';
-      }
-      this.paths.set(noteId, { sealed: note.name, path });
-      return path;
+    // Every note has a name, so a name that will not open is a damaged one - which is a thing to say
+    // plainly. Reading a title out of the body instead, as this used to, meant drawing the tree
+    // could download notes nobody had asked to read.
+    let path: string;
+    try {
+      path = open(this.key, note.name);
+    } catch {
+      path = 'Unreadable name';
     }
-
-    return this.derivedTitle(noteId);
+    this.paths.set(noteId, { sealed: note.name, path });
+    return path;
   }
 
   /** The note's own name without its folders - what the sidebar and the title bar show. */
@@ -471,28 +580,6 @@ export class VaultStore {
   /** The folder a note is filed in, or '' for the top level. */
   folderOf(noteId: string): string {
     return parentPath(this.pathOf(noteId));
-  }
-
-  private derivedTitle(noteId: string): string {
-    // The body is what the title is read out of, and it is not downloaded until the note is opened.
-    // "Untitled" until then, rather than an error where a name should be - `loadUnnamedTitles`
-    // fetches these in the background and redraws.
-    if (!this.hasBodies(noteId)) {
-      return 'Untitled';
-    }
-
-    let text: string;
-    try {
-      text = this.textOf(noteId);
-    } catch {
-      return 'Unreadable note';
-    }
-
-    const firstLine = text.split('\n').find((line) => line.trim().length > 0);
-    if (!firstLine) {
-      return 'Untitled';
-    }
-    return firstLine.replace(/^#+\s*/, '').slice(0, 80);
   }
 
   /**
@@ -842,7 +929,10 @@ export class VaultStore {
 
   /** Restoring writes the old text forward as a new version - history is never rewritten. */
   async restore(noteId: string, versionId: string): Promise<void> {
-    await this.ensureNote(noteId);
+    // The version being restored and the head the save will diff against - two chains, which may
+    // share nothing at all when the restore reaches a long way back.
+    await this.ensureVersions([versionId, this.headOf(noteId)]);
+
     const text = this.materialise(versionId);
     await this.saveNote(noteId, text, { label: undefined });
   }
@@ -1097,8 +1187,8 @@ export class VaultStore {
     for (const note of this.listNotes()) {
       const name = this.pathOf(note.id);
 
-      // Two notes cannot share a path, so this only happens when a name would not decrypt and
-      // `pathOf` fell back to standing in for it. Writing both would put one on top of the other.
+      // Two notes cannot share a path, so this only happens when neither name would decrypt and
+      // both came back as the same stand-in. Writing both would put one on top of the other.
       if (used.has(name)) {
         unreadable.push({ name, reason: 'Another note is already filed here.' });
         continue;

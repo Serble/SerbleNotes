@@ -15,8 +15,9 @@ import { fileURLToPath } from 'node:url';
 // @ts-expect-error - resolved by tests/support/hooks.mjs, exactly as Vite resolves it for the app.
 import { initSync } from '@core';
 
-const WASM = fileURLToPath(
-  new URL('../../../SerbleNotes.Core/pkg/serblenotes_core_bg.wasm', import.meta.url),
-);
+// See the note on CORE in `hooks.mjs`: the same override, for the binary beside the glue.
+const WASM = process.env.SERBLENOTES_CORE_PKG
+  ? `${process.env.SERBLENOTES_CORE_PKG}/serblenotes_core_bg.wasm`
+  : fileURLToPath(new URL('../../../SerbleNotes.Core/pkg/serblenotes_core_bg.wasm', import.meta.url));
 
 initSync({ module: readFileSync(WASM) });
