@@ -1706,9 +1706,17 @@ dotnet publish SerbleNotes.Backend -c Release -o out
 ```
 
 Local dev database is the existing `dev-mysql` container on **port 3307** (root/root), database
-`serblenotes`. Installed: .NET 10.0.201, `dotnet-ef` 10.0.6, Rust 1.94.1, wasm-pack, Node 22,
+`serblenotes`. Installed: .NET 10.0.201, `dotnet-ef` 10.0.6, Rust 1.94.1, Node 22,
 docker/podman, the Android SDK at `~/Android/Sdk` with NDK 27.1.12297006. **Not** installed: Redis,
 MinIO. Shell is **fish**, so bash-isms like `export X=y` don't work (`set -x X y`).
+
+**wasm-pack is a devDependency, not something the machine has to have.** `npm run build:core` runs
+it, and npm puts `node_modules/.bin` ahead of the PATH, so `npm ci` is the whole of installing it -
+which is what makes `dotnet publish` work on a build agent nobody has set up by hand. It was a
+globally installed tool before, and the failure was `sh: 1: wasm-pack: not found` from inside an npm
+script three layers below the command that was actually run. The one thing that breaks it is
+`npm ci --ignore-scripts`: the package's postinstall is what downloads the binary for the platform.
+A Rust toolchain is still needed, because wasm-pack drives cargo.
 
 `SkipWebClientBuild=true` skips the frontend during publish when you only want the backend.
 
