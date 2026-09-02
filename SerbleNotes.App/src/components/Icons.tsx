@@ -278,6 +278,19 @@ export const PasteIcon = ({ size = 16 }: IconProps) => (
 );
 
 /*
+ * Paste, with the formatting left behind: the same clipboard, holding one plain line. A second line
+ * would be more obviously "text" and is exactly the stroke the weight cannot take at 16px - the
+ * board already has four sides and a clip, and the gap between two lines closes up.
+ */
+export const PasteTextIcon = ({ size = 16 }: IconProps) => (
+  <svg {...base(size)} aria-hidden="true">
+    <path d="M9 4.6H7a2 2 0 0 0-2 2v12.4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6.6a2 2 0 0 0-2-2h-2" />
+    <rect x="9" y="2.8" width="6" height="3.6" rx="1.2" />
+    <path d="M8.6 13.4h6.8" />
+  </svg>
+);
+
+/*
  * The two selections: something marked off from what is round it. Both were drawn as a dashed
  * marquee first, the way a selection being dragged out looks - and a dash at 16px is a row of blobs,
  * because the gaps are smaller than the weight the whole set is drawn at. Marking only the corners

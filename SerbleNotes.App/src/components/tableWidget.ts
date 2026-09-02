@@ -11,6 +11,7 @@ import {
   unescapeCell,
 } from './tableFormat';
 import { hasMarkup, renderInline } from './inlineMarkdown';
+import { inlineHtmlToMarkdown } from './htmlToMarkdown';
 import { openLink, rememberPointedLink } from './linkClicks';
 import { appendColumn, appendRow, moveRow, setCell } from './tables';
 
@@ -390,6 +391,30 @@ export class TableWidget extends WidgetType {
     cell.addEventListener('contextmenu', claim);
     cell.addEventListener('keydown', (event) => this.onKey(event, view, cell, commit, row, column));
 
+    // Formatted text pasted into a cell, as the inline markdown a cell can draw.
+    //
+    // A cell is `plaintext-only`, so the browser would otherwise put the words in and drop the
+    // link that was the reason for copying them. It is inline markdown rather than the full
+    // conversion because a cell holds one line: `inlineHtmlToMarkdown` flattens a pasted paragraph
+    // the way `escapeCell` already flattens a pasted line break. The text is inserted through the
+    // browser's own editing command so that it joins the cell's undo history and fires the `input`
+    // that the debounced commit is listening for - writing it into the document directly would
+    // rebuild the table under the caret mid-paste.
+    cell.addEventListener('paste', (event) => {
+      const html = event.clipboardData?.getData('text/html') ?? '';
+      if (!html.trim()) {
+        return;
+      }
+
+      const markdown = inlineHtmlToMarkdown(html);
+      if (!markdown || markdown === (event.clipboardData?.getData('text/plain') ?? '').trim()) {
+        return;
+      }
+
+      event.preventDefault();
+      insertIntoCell(cell, markdown);
+    });
+
     // The editable box is a child of the cell rather than the cell itself, so that the drag handle
     // has somewhere to sit that is not inside the text. Anything clicked in the cell but outside that
     // box - the hairline of the border, a sliver the layout left over - still means "edit this cell",
@@ -743,4 +768,37 @@ function caretOffset(cell: HTMLElement): number | null {
   upTo.selectNodeContents(cell);
   upTo.setEnd(range.startContainer, range.startOffset);
   return upTo.toString().length;
+}
+
+/**
+ * Text put into a cell where the caret is, through the browser's own editing command.
+ *
+ * `insertText` is what makes a paste look like typing: it lands in the cell's undo history and
+ * fires the `input` event the debounced commit is waiting for. Where it is refused - it is an old
+ * command and some engines have opinions about it - the range is edited by hand and the event sent
+ * on its behalf, so the cell is written back either way.
+ */
+function insertIntoCell(cell: HTMLElement, text: string): void {
+  if (document.execCommand('insertText', false, text)) {
+    return;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return;
+  }
+
+  const range = selection.getRangeAt(0);
+  if (!cell.contains(range.commonAncestorContainer)) {
+    return;
+  }
+
+  range.deleteContents();
+  const inserted = document.createTextNode(text);
+  range.insertNode(inserted);
+  range.setStartAfter(inserted);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  cell.dispatchEvent(new Event('input', { bubbles: true }));
 }

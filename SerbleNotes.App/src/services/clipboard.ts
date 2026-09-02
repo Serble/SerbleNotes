@@ -53,3 +53,38 @@ export async function readText(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Both flavours of what is on the clipboard: the words, and - where the application it was copied
+ * from wrote one - the same thing as HTML.
+ *
+ * `navigator.clipboard.read` is the only way to reach anything but plain text, and it is refused
+ * more often than `readText` is: it needs a secure context, some engines gate it behind a prompt,
+ * and some do not have it at all. So a failure here falls back to the plain text rather than being
+ * reported - a paste that loses its formatting is a worse paste, not a broken one. Null still means
+ * what it always meant: this app cannot read the clipboard here at all.
+ */
+export async function readClipboard(): Promise<{ text: string; html: string | null } | null> {
+  try {
+    let text = '';
+    let html: string | null = null;
+
+    for (const item of await navigator.clipboard.read()) {
+      if (html === null && item.types.includes('text/html')) {
+        html = await (await item.getType('text/html')).text();
+      }
+      if (!text && item.types.includes('text/plain')) {
+        text = await (await item.getType('text/plain')).text();
+      }
+    }
+
+    if (text || html !== null) {
+      return { text, html };
+    }
+  } catch {
+    // Fall through: the plain text on its own is still worth having.
+  }
+
+  const text = await readText();
+  return text === null ? null : { text, html: null };
+}

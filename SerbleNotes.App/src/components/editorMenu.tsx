@@ -13,6 +13,7 @@ import {
   MoveRightIcon,
   MoveUpIcon,
   PasteIcon,
+  PasteTextIcon,
   RowIcon,
   SelectAllIcon,
   SelectWordIcon,
@@ -20,7 +21,8 @@ import {
   TextIcon,
   TrashIcon,
 } from './Icons';
-import { copyText, readText } from '../services/clipboard';
+import { copyText, readClipboard, readText } from '../services/clipboard';
+import { htmlToMarkdown, inlineHtmlToMarkdown } from './htmlToMarkdown';
 import { columnCount } from './tableFormat';
 import { destinationAt, openLink } from './linkClicks';
 import { isTextMode, setTextMode } from './tableState';
@@ -113,12 +115,28 @@ export function editorMenu(
     view.focus();
   };
 
-  const paste = async () => {
-    const text = await readText();
-    if (text === null) {
+  /**
+   * Paste, with `formatted` deciding whether the clipboard's HTML flavour is read.
+   *
+   * The menu has to offer both, because it is the one way in that cannot be modified by holding a
+   * key: Ctrl-Shift-V pastes plainly on a keyboard because the browser leaves the HTML off the
+   * event, and there is no equivalent gesture for pressing a menu item. A cell takes the inline
+   * conversion - it holds one line - and the note takes the whole of it.
+   */
+  const paste = async (formatted: boolean) => {
+    const clip = formatted ? await readClipboard() : { text: (await readText()) ?? null, html: null };
+    if (clip === null || clip.text === null) {
       notify('This browser will not let the app read the clipboard. Ctrl-V still works.');
       return;
     }
+
+    const converted = clip.html
+      ? cell
+        ? inlineHtmlToMarkdown(clip.html)
+        : htmlToMarkdown(clip.html)
+      : '';
+    const text = converted || clip.text;
+
     if (cell) {
       replaceInCell(view, cell, text);
       return;
@@ -147,7 +165,10 @@ export function editorMenu(
       hint: nothingSelected ? 'Select some text first' : undefined,
       run: () => void copy(),
     },
-    { label: 'Paste', icon: <PasteIcon />, run: () => void paste() },
+    { label: 'Paste', icon: <PasteIcon />, run: () => void paste(true) },
+    // The formatting is thrown away rather than converted. This is the menu's Ctrl-Shift-V, and it
+    // exists because a menu item is the one way in that cannot be modified by holding a key.
+    { label: 'Paste as text', icon: <PasteTextIcon />, run: () => void paste(false) },
     {
       label: 'Select word',
       icon: <SelectWordIcon />,

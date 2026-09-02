@@ -15,6 +15,7 @@ import { htmlView } from './htmlView';
 import { linkClicks, linkPointer, pointedLink } from './linkClicks';
 import { listKeys } from './lists';
 import { livePreview } from './livePreview';
+import { pasteHtml } from './pasteHtml';
 import { tableControls } from './tableControls';
 import { tableView } from './tableView';
 import { tables } from './tables';
@@ -561,6 +562,7 @@ export function MarkdownEditor({ value, onChange, onNotice }: MarkdownEditorProp
         copyCode,
         linkClicks,
         linkPointer,
+        pasteHtml,
         htmlView,
         // Before the table extensions and the live preview: a conflict region is replaced whole, and
         // nothing inside it should be decorated as the markdown it accidentally resembles.

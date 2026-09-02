@@ -938,6 +938,81 @@ neither.
 - **A command that does not apply is shown disabled with a reason**, never left out. A menu whose
   items move about between openings is one nobody can learn.
 
+### Pasting formatted text
+
+Copying a masked link, a heading or a table out of a web page, a Word document or a Google Doc and
+pasting it into a note gives you that thing, not its words. Every application worth copying out of
+puts two flavours on the clipboard - `text/plain` and `text/html` - and this app used to read only
+the first, which is why a link arrived as its label with the address gone.
+
+`components/htmlToMarkdown.ts` decides what the HTML flavour means, once, for all three places a
+paste can land: the editor (`pasteHtml.ts`), a drawn table's cell (`tableWidget.ts`), and the context
+menu's own Paste (`editorMenu.tsx`).
+
+- **The output is text, not markup**, which is what keeps this off the security boundary entirely.
+  Nothing here emits HTML it was handed; every tag becomes a markdown construct or contributes only
+  its words, and what a note may *draw* is still decided in one place by `noteHtml.ts` when it is
+  drawn. `<u>` is the only tag written out, constructed here from a fixed name because markdown has
+  no underline.
+- **It is an addition, never a replacement.** With no HTML flavour, with nothing to convert, or when
+  the conversion says exactly what the plain text already said, nothing happens and CodeMirror pastes
+  as it always did. So the only pastes that behave differently are the ones that were losing
+  something - and **Ctrl-Shift-V needs no code**, because the browser leaves the HTML flavour off the
+  event when a plain paste is asked for. The menu offers "Paste as text" for the same job, since a
+  menu item cannot be modified by holding a key.
+- **Formatting is read from inline styles as well as from tags, and the style wins.** This is not
+  thoroughness, it is the only way a Google Doc converts at all: Docs marks bold as
+  `<span style="font-weight:700">` rather than `<strong>`, and wraps the whole fragment in a single
+  `<b style="font-weight:normal">`. Reading the tag first renders every Docs paste entirely bold and
+  finds no emphasis anywhere in it. That wrapper is also why an inline element containing blocks is
+  treated as transparent - otherwise the entire document flattens into one line.
+- **Styles are read from the `style` attribute, not through the CSSOM.** What a browser keeps for a
+  shorthand like `text-decoration` differs between engines, so the same paste would convert
+  differently depending on where it landed. The attribute is the same string everywhere.
+- **Redirect wrappers are unwrapped.** Docs rewrites every link as `google.com/url?q=...` and Outlook
+  as a Safe Links address. Neither is what was copied - they expire, they identify the sender, and
+  they say nothing about where they go.
+- **A pasted table is laid out by `renderTable`**, the same function every table in this app is
+  written with, so it is padded and aligned exactly like one typed here. A converter of its own would
+  emit `| a | b |` and the difference would be visible on the line below. Two things a markdown table
+  cannot express are handled rather than refused: it has no way to say "no header", so a table
+  without one gives up its first row to be one; and a merged cell has no notation, so a `colspan`
+  becomes its text plus the empty cells it covered, which keeps every row the same width.
+- **Word's lists are not lists.** They are ordinary paragraphs carrying `mso-list:l0 level2 lfo1`,
+  with the bullet or number drawn inside a span marked `mso-list: Ignore`. Nothing looking for `<ul>`
+  will ever find them, and left alone a five-item list pastes as five paragraphs each beginning with
+  a stray bullet character.
+- **`white-space: pre-wrap` in the source is ignored, and only a real `<pre>` keeps its whitespace.**
+  Docs sets pre-wrap on every span it writes while its own markup is broken across lines for
+  readability, so honouring it turns the line breaks in Docs' file into line breaks in the note. A
+  non-breaking space *is* turned into a space: it is invisible, indistinguishable from one, and a
+  note is source somebody edits by hand.
+- **It stands back inside code and inside a table's markdown.** Markdown means nothing in a fenced
+  block, so a pasted `<h1>` would be writing markup into a document that asked for none; and the
+  lines of a table's source *are* the table, so a list dropped into the middle of them is neither.
+  `pasteMarkdown` is separate from the DOM event so that decision can be tested, because it has two
+  quiet ways to be wrong and both look identical in review.
+- **A screenshot is not pasted.** An image with an `http`/`https` source becomes `![alt](url)`;
+  anything else - overwhelmingly a `data:` URI carrying megabytes of base64 - becomes its alt text,
+  which is what this app draws for a remote image anyway.
+- **Escaping is where the silent bugs are**, so it is tested hard. Everything that opens markup in
+  this dialect is escaped, with two narrowed on purpose because the alternative is source nobody
+  wants to read on the cursor's line: `_` only at a word boundary (`snake_case_name` is not emphasis
+  in CommonMark), and `=` only in a run of two or more, which is what `==highlight==` needs.
+- **A cell takes the inline conversion.** `inlineHtmlToMarkdown` flattens a pasted paragraph onto one
+  line, which is the rule a cell already follows for plain text, and the text goes in through the
+  browser's own `insertText` so it joins the cell's undo history and fires the `input` the debounced
+  commit is listening for. Writing it into the document directly would rebuild the table under the
+  caret mid-paste.
+- **Only a *nested* list joins tight to the line above it.** Joining every list that way put a list
+  directly under its heading - which happens to parse, and is not what anybody writes. That was a
+  real bug, found by driving the paste through a real CodeMirror rather than by testing the converter
+  alone, and there is a test for it now.
+
+Deliberately not built: dropping a link onto the editor (`text/uri-list` on `drop` is the same
+conversion, wired to a different event), and footnote or definition-list constructs, which this
+app's markdown does not support anyway.
+
 ### Sync
 
 WebSocket push, Redis pub/sub for fan-out across backend instances (Redis not built - fan-out is
@@ -1517,6 +1592,7 @@ button that either works or visibly does not, and is not worth a test.
 | `diff.test.ts` | The diff reader, whose bug is a version shown as having changed less than it did. |
 | `conflicts.test.ts` | Reading conflict markers back out of a note. |
 | `cssScope.test.ts` | The CSS scoping, whose bug is a note styling the app with nothing on the screen to say so. |
+| `htmlToMarkdown.test.ts` | Pasting formatted text: what each application really puts on the clipboard, and what it becomes. Needs a DOM, so it is the one suite that pulls in jsdom. |
 | `dates.test.ts` | Reading the server's zone-less UTC stamps, which are hours out for everyone if read as local time. |
 
 `paths.test.ts` and `archive.test.ts` were absent for a long time while this file claimed the move and
@@ -1526,10 +1602,16 @@ what happens to a note the user already had. The blank-rename test is the one th
 twice over - it fails if `join` is changed back to normalising the whole joined string, which is a real
 bug this project has already had once.
 
-The DOM half of drawing a note - the sanitiser, the CSS parse, the decorations `htmlView` builds -
-has no tests here, because a DOM is what it needs and jsdom is not a dependency. It was driven under
-one during the work and the results checked by hand; if that becomes a regular need, adding jsdom as
-a dev dependency is the change to make, and it is the reason `cssScope.ts` has no imports of its own.
+**jsdom is a dev dependency now**, and `tests/support/dom.ts` is the whole of using it: importing
+that module installs `DOMParser` and nothing else. This file said for a long time that adding it was
+"the change to make" if a DOM became a regular need; `htmlToMarkdown.ts` is that need. It is handed a
+document rather than a string of markdown, and its failures are the quiet kind - a list that comes
+back as paragraphs, a link that keeps its tracking wrapper - which is exactly what a hand-check in a
+browser stops catching the second time somebody edits it.
+
+The DOM half of *drawing* a note - the sanitiser, the CSS parse, the decorations `htmlView` builds -
+still has no tests. That is now a gap rather than a constraint: jsdom is here, and `cssScope.ts` has
+no imports of its own precisely so it can be tested under one.
 
 ```fish
 cd SerbleNotes.App; npm test
@@ -1593,10 +1675,10 @@ Scores as they stand, and what they mean rather than what they are:
 | `components/cssScope.ts` | 47% | Mostly untestable here, and known - see below. |
 
 **`cssScope.ts` scores badly for a reason that is already written down.** Two thirds of it needs a
-DOM - `CSSStyleSheet`, `document.implementation` - and jsdom is deliberately not a dependency, so
-`scopeCss`, `parse` and `rulesToText` are not exercised at all by `cssScope.test.ts`. That is the
-limitation described under "The client's own tests", now with a number on it. The score is a reason
-to add jsdom if this ever gets touched often, not a reason to write tests around the DOM.
+DOM - `CSSStyleSheet`, `document.implementation` - so `scopeCss`, `parse` and `rulesToText` are not
+exercised at all by `cssScope.test.ts`. That was a constraint when jsdom was not a dependency; it is
+one now (see "The client's own tests"), so this number is a gap somebody could close rather than a
+fact about what can be tested.
 
 The remaining survivors there are the quote handling in `splitSelectors`, and those are **not worth
 killing**: every realistic selector with a comma in a string also has it inside brackets
