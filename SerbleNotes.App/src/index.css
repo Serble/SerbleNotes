@@ -1346,6 +1346,33 @@ body.resizing * { cursor: inherit; }
 
 .tree-empty { margin: 0; padding: 0.15rem 0; font-size: 0.8rem; color: var(--faint); }
 
+/* Picked up by a finger. It stays where it is - what moves is the ghost following the finger -
+   so this is only what says the row is now somewhere else. */
+.tree-row.lifted {
+  opacity: 0.4;
+  outline: 1px dashed var(--border);
+}
+
+/* What the browser draws for a mouse drag and does not for a touch one. It sits above the finger,
+   and takes no pointer events: what is under the finger has to be the row being aimed at. */
+.tree-ghost {
+  position: fixed;
+  z-index: 60;
+  transform: translate(-0.6rem, -160%);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 60vw;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 45%);
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
 .tree-row .icon {
   opacity: 0;
   width: 26px;
@@ -1959,6 +1986,18 @@ body.resizing * { cursor: inherit; }
 @media (pointer: coarse) {
   .tree-open { min-height: 38px; }
   .tree-row .icon { width: 38px; min-width: 38px; min-height: 38px; }
+
+  /* Holding a row is how it is picked up (treeDrag.ts), and the browser's own answer to holding
+     text is to start selecting it or to raise a callout - either of which eats the gesture. There
+     is nothing in a tree row worth selecting anyway. */
+  .tree-row {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    /* iPadOS answers a long press on a draggable element with its own drag, which would take the
+       gesture over halfway through it. The row is still `draggable` for the mouse. */
+    -webkit-user-drag: none;
+  }
   .crumbs { min-height: 30px; }
   .note-bar-actions .ghost { padding: 0; width: var(--control); justify-content: center; }
 }

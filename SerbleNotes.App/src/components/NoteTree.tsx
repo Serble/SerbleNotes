@@ -12,6 +12,7 @@ import {
   TrashIcon,
 } from './Icons';
 import { ContextMenu, type MenuItem, type MenuState } from './ContextMenu';
+import { dropTarget as dropAttrs, useTouchDrag } from './treeDrag';
 import type { TreeNode } from '../services/store';
 
 export interface TreeActions {
@@ -180,6 +181,7 @@ export function NoteTree(props: NoteTreeProps) {
   // The folder just jumped to from the filter, marked until the eye has had a chance to find it.
   const [flash, setFlash] = useState<string | null>(null);
   const flashTimer = useRef<number>();
+  const tree = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => window.clearTimeout(flashTimer.current), []);
 
@@ -222,8 +224,8 @@ export function NoteTree(props: NoteTreeProps) {
     flashTimer.current = window.setTimeout(() => setFlash(null), FLASH_MS);
   };
 
-  const drop = (targetFolder: string) => {
-    const item = dragItem;
+  const drop = (targetFolder: string, dragged: DragItem | null = dragItem) => {
+    const item = dragged;
     dragItem = null;
     setDropTarget(null);
     if (!item) {
@@ -278,6 +280,32 @@ export function NoteTree(props: NoteTreeProps) {
     setMenu({ x: event.clientX, y: event.clientY, items });
   };
 
+  /**
+   * The same tree under a finger. A long press opens the menu, and holding on through it takes the
+   * menu away and picks the row up - see treeDrag.ts for why the gesture is shaped that way, and
+   * for why the rows have to say what they are with an attribute rather than with handlers.
+   */
+  const touch = useTouchDrag<DragItem>({
+    container: tree,
+    openMenu: (x, y, items) => setMenu({ x, y, items }),
+    closeMenu: () => setMenu(null),
+    onOver: setDropTarget,
+    reveal,
+    drop,
+  });
+
+  /**
+   * The row's own buttons are not the row: a long press on the delete icon, or on a folder's new
+   * note and rename icons, is aimed at that button rather than at the row it happens to sit on.
+   */
+  const pressRow = (event: React.TouchEvent, item: DragItem, menu: MenuItem[]) => {
+    event.stopPropagation();
+    if (event.target instanceof Element && event.target.closest('button.icon')) {
+      return;
+    }
+    touch.start(event, { item, menu });
+  };
+
   const rows = (list: TreeNode[], depth: number, parent: string): React.ReactNode =>
     list.map((node) => {
       const isNote = node.noteId !== undefined;
@@ -310,14 +338,25 @@ export function NoteTree(props: NoteTreeProps) {
 
       if (isNote) {
         const noteId = node.noteId!;
+        const item: DragItem = { kind: 'note', id: noteId, path: node.path, name: node.name };
         return (
           <div
             key={node.path}
-            className={noteId === props.selectedId ? 'tree-row selected' : 'tree-row'}
+            className={[
+              'tree-row',
+              noteId === props.selectedId ? 'selected' : '',
+              touch.dragging?.item.path === node.path ? 'lifted' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
             style={indent}
+            // A note dropped on lands in the folder it is sitting in, which is what every file
+            // manager does and what the mouse drag below already does.
+            {...dropAttrs(parent)}
+            onTouchStart={(event) => pressRow(event, item, noteMenu(node, noteId))}
             draggable
             onDragStart={(event) => {
-              dragItem = { kind: 'note', id: noteId, path: node.path, name: node.name };
+              dragItem = item;
               event.dataTransfer.effectAllowed = 'move';
               event.dataTransfer.setData('text/plain', node.name);
             }}
@@ -370,6 +409,12 @@ export function NoteTree(props: NoteTreeProps) {
             depth={depth}
             open={open}
             highlighted={dropTarget === node.path}
+            lifted={touch.dragging?.item.path === node.path}
+            // A shut folder says so, because settling on one mid-drag opens it.
+            dropProps={dropAttrs(node.path, !open)}
+            onTouchStart={(event) =>
+              pressRow(event, { kind: 'folder', path: node.path, name: node.name }, folderMenu(node))
+            }
             flash={flash === node.path}
             onToggle={() => (filtering ? goTo(node.path) : toggle(node.path))}
             onRename={() => setRenaming(node.path)}
@@ -403,8 +448,18 @@ export function NoteTree(props: NoteTreeProps) {
   return (
     <>
       <div
+        ref={tree}
         className={dropTarget === '' ? 'tree drop-root' : 'tree'}
         onContextMenu={(event) => openMenu(event, rootMenu())}
+        // Rows stop this from bubbling, so what is left is the empty space below the last one:
+        // a menu, and nothing to pick up. A row being renamed is an exception - it is a text box,
+        // and a long press in one belongs to the platform's own selection.
+        onTouchStart={(event) => {
+          if (event.target instanceof Element && event.target.closest('input')) {
+            return;
+          }
+          touch.start(event, { item: null, menu: rootMenu() });
+        }}
         onDragOver={(event) => {
           if (!dragItem) {
             return;
@@ -431,6 +486,15 @@ export function NoteTree(props: NoteTreeProps) {
       </div>
 
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+
+      {/* What the browser would have drawn for a mouse drag. Never under the finger, or it would be
+          what elementFromPoint finds instead of the row being aimed at. */}
+      {touch.dragging && (
+        <div className="tree-ghost" ref={touch.ghost} aria-hidden>
+          {touch.dragging.item.kind === 'note' ? <NoteIcon /> : <FolderIcon />}
+          <span className="tree-name">{touch.dragging.item.name}</span>
+        </div>
+      )}
     </>
   );
 }
@@ -440,6 +504,11 @@ interface FolderRowProps {
   depth: number;
   open: boolean;
   highlighted: boolean;
+  /** Being dragged by a finger, so it is drawn as picked up. */
+  lifted: boolean;
+  /** What makes the row a drop target for a touch drag - see treeDrag.ts. */
+  dropProps: Record<string, string>;
+  onTouchStart: (event: React.TouchEvent) => void;
   /** Just jumped to from the filter: take the caret and say which row it was. */
   flash: boolean;
   onToggle: () => void;
@@ -471,7 +540,13 @@ function FolderRow(props: FolderRowProps) {
     open.current?.scrollIntoView({ block: 'nearest' });
   }, [flash]);
 
-  const className = ['tree-row', 'folder', props.highlighted ? 'drop-into' : '', flash ? 'flash' : '']
+  const className = [
+    'tree-row',
+    'folder',
+    props.highlighted ? 'drop-into' : '',
+    props.lifted ? 'lifted' : '',
+    flash ? 'flash' : '',
+  ]
     .filter(Boolean)
     .join(' ');
 
@@ -479,6 +554,8 @@ function FolderRow(props: FolderRowProps) {
     <div
       className={className}
       style={{ paddingLeft: `${props.depth * 0.8 + 0.35}rem` }}
+      {...props.dropProps}
+      onTouchStart={props.onTouchStart}
       draggable
       onDragStart={(event) => {
         props.onDragStart();
