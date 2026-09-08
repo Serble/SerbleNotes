@@ -20,6 +20,7 @@ import {
   resync,
   typed,
   unsaved,
+  type EditorAccess,
   type EditorState,
 } from '../../src/services/noteSync';
 import { VaultStore } from '../../src/services/store';
@@ -43,13 +44,47 @@ export function newVault(id = 'vault-1'): Vault {
 export class Device {
   readonly store: VaultStore;
 
-  editor: EditorState = {
+  private state: EditorState = {
     text: '',
     baseline: null,
     mergeParent: null,
     conflicted: false,
     status: 'saved',
     error: null,
+  };
+
+  /**
+   * Every text the editor has been shown, in order.
+   *
+   * This is the `value` prop of `MarkdownEditor`, and that component's second effect pushes any
+   * change to it straight into the open document - so a value that goes *backwards* is not a
+   * bookkeeping detail, it is the user watching what they just typed get undone. Recorded here so a
+   * test can assert about the whole sequence rather than only about where it ended up.
+   */
+  readonly shown: string[] = [];
+
+  /** What the workspace holds. Assigning is what the editor sees, so it is written down. */
+  get editor(): EditorState {
+    return this.state;
+  }
+
+  set editor(next: EditorState) {
+    this.state = next;
+    this.shown.push(next.text);
+  }
+
+  /**
+   * The editor, as `services/noteSync.ts` reads and writes it - `editorAccess` in `VaultPage`.
+   *
+   * Reading rather than being handed a state is the whole of how a save or a merge keeps what was
+   * typed while it was in flight, so a harness that passed a snapshot would be testing something
+   * the workspace does not do.
+   */
+  private readonly access: EditorAccess = {
+    read: () => this.editor,
+    write: (next: EditorState) => {
+      this.editor = next;
+    },
   };
 
   /** Which note the editor has open. */
@@ -159,15 +194,22 @@ export class Device {
 
   /** The autosave, with its debounce collapsed to "now". */
   async autosave(): Promise<void> {
-    this.editor = await this.net(() => commit(this.store, this.selected!, this.editor));
+    await this.net(() => commit(this.store, this.selected!, this.access));
   }
 
   /** The sync socket said the vault moved, and this device had to ask what changed. */
   async remoteChange(): Promise<void> {
     await this.pull();
-    if (this.selected) {
-      this.editor = await this.net(() => reconcile(this.store, this.selected!, this.editor));
+    await this.reconcileInto();
+  }
+
+  /** `VaultPage.reconcileNote`: the merge writes into the editor itself, when it has anything to. */
+  private async reconcileInto(): Promise<void> {
+    if (!this.selected) {
+      return;
     }
+
+    await this.net(() => reconcile(this.store, this.selected!, this.access));
   }
 
   /**
@@ -181,14 +223,12 @@ export class Device {
     if (!complete) {
       await this.pull();
     }
-    if (this.selected) {
-      this.editor = await this.net(() => reconcile(this.store, this.selected!, this.editor));
-    }
+    await this.reconcileInto();
   }
 
   /** The network came back: catch up, merge, and send whatever was being held. */
   async resync(): Promise<void> {
-    this.editor = await this.net(() => resync(this.store, this.selected, this.editor));
+    await this.net(() => resync(this.store, this.selected, this.access));
   }
 
   unsaved(): boolean {

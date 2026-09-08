@@ -49,6 +49,7 @@ import {
   resync,
   typed,
   unsaved,
+  type EditorAccess,
   type EditorState,
 } from "../services/noteSync";
 import {
@@ -282,7 +283,6 @@ function Workspace({
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
   const { text, conflicted } = editor;
 
-  const setText = useCallback((next: string) => setEditor((current) => typed(current, next)), []);
   const [showHistory, setShowHistory] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [previewVersion, setPreviewVersion] = useState<NoteVersion | null>(
@@ -407,6 +407,30 @@ function Workspace({
   }, []);
 
   /**
+   * The editor, as `services/noteSync.ts` reads and writes it.
+   *
+   * The pair rather than a value handed in and a value applied afterwards: those functions each
+   * spend a round trip at the server, and the person is still typing across it. See `EditorAccess`
+   * there for what that costs when it is got wrong, and `tests/typing.test.ts` for the shape of it.
+   */
+  const editorAccess = useMemo<EditorAccess>(
+    () => ({ read: () => editorRef.current, write: applyEditor }),
+    [applyEditor],
+  );
+
+  /**
+   * Someone typed.
+   *
+   * Through `applyEditor` rather than `setEditor`, so the ref moves with the keystroke rather than
+   * with the render that follows it: everything in `services/noteSync.ts` reads the editor back
+   * when its request returns, and a ref one render behind is a ref one keystroke behind.
+   */
+  const setText = useCallback(
+    (next: string) => applyEditor(typed(editorRef.current, next)),
+    [applyEditor],
+  );
+
+  /**
    * Opens a note, downloading its history first if this device does not have it.
    *
    * Opening a vault no longer brings the notes themselves with it, so this is where the bytes for
@@ -462,11 +486,8 @@ function Workspace({
       return;
     }
 
-    const next = await reconcile(store, noteId, editorRef.current);
-    if (next !== editorRef.current) {
-      applyEditor(next);
-    }
-  }, [store, applyEditor]);
+    await reconcile(store, noteId, editorAccess);
+  }, [store, editorAccess]);
 
   useEffect(() => {
     store.onChanged = refresh;
@@ -569,12 +590,12 @@ function Workspace({
    */
   const handleReconnect = useCallback(async () => {
     try {
-      applyEditor(await resync(store, selectedRef.current, editorRef.current));
+      await resync(store, selectedRef.current, editorAccess);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [store, applyEditor]);
+  }, [store, editorAccess]);
 
   useEffect(() => {
     const socket = new SyncSocket({
@@ -617,18 +638,19 @@ function Workspace({
 
     const timer = window.setTimeout(() => {
       void (async () => {
-        // The state is read again here rather than captured: the merge that a remote change starts
-        // is asynchronous, and what should be written is whatever the editor holds at the moment
-        // the timer fires.
-        applyEditor(await commit(store, selected, editorRef.current));
+        // The editor is read by `commit` itself, at the moment the timer fires and again when the
+        // server answers - what is written is never a state from before the request went out.
+        await commit(store, selected, editorAccess);
         refresh();
       })();
     }, AUTOSAVE_MS);
 
     return () => window.clearTimeout(timer);
     // `editor.text` rather than `editor`: a save that only changed the indicator must not restart
-    // the timer, or a note that failed to save would re-attempt on a loop of its own making.
-  }, [editor.text, selected, store, applyEditor]);
+    // the timer, or a note that failed to save would re-attempt on a loop of its own making. It is
+    // also what re-arms the timer for a keystroke made while the last save was in flight, which
+    // `commit` leaves as unsent rather than swallowing.
+  }, [editor.text, selected, store, editorAccess]);
 
   /**
    * Runs a change against the store and shows anything it refuses. Moves and renames are the one

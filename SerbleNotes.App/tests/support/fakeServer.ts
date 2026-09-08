@@ -63,6 +63,7 @@ export function setOffline(value: boolean): void {
 
 /** Puts the server back to empty. Call it in a `beforeEach`; node reuses the module across tests. */
 export function resetServer(): void {
+  intercept(null);
   notes.clear();
   versions.clear();
   broadcasts.length = 0;
@@ -164,7 +165,30 @@ export function lastBroadcast(vaultId: string): SyncEvent {
   return events[events.length - 1];
 }
 
-export const api = {
+/**
+ * Something the test does while a request is unanswered.
+ *
+ * Every call below returns on the next microtask, which is a poor model of the only moment in a
+ * syncing client that is actually hard: the gap between a request leaving the device and its answer
+ * arriving, during which the person carries on typing. That gap is real time - a keystroke is a task
+ * of its own and cannot land inside a chain of microtasks - so a test that needs one has to be given
+ * it, and this is where.
+ *
+ * The function is called with the name of the request as it goes out, and the request is not
+ * answered until whatever it returns settles. Typing from inside it is therefore typing while that
+ * request is in flight, which is exactly the situation `tests/typing.test.ts` is about.
+ *
+ * Set back to null by `resetServer`, so a test that installs one cannot leak it into the next.
+ */
+type Interceptor = (call: keyof typeof answers) => unknown;
+
+let interceptor: Interceptor | null = null;
+
+export function intercept(fn: Interceptor | null): void {
+  interceptor = fn;
+}
+
+const answers = {
   createNote: async (
     vaultId: string,
     body: { id: string; name: string; initialVersion: NewVersionBody },
@@ -296,3 +320,23 @@ export const api = {
     broadcast(note.vaultId, tombstone.cursor, [tombstone], []);
   },
 };
+
+/**
+ * What `services/api.ts` exports, as far as the store is concerned.
+ *
+ * Wrapped rather than exported directly so that every request passes the interceptor above on its
+ * way out. Nothing else about it changes: the call is the same function with the same arguments,
+ * one await later.
+ */
+export const api: typeof answers = Object.fromEntries(
+  Object.entries(answers).map(([name, call]) => [
+    name,
+    async (...args: unknown[]) => {
+      // Before the interceptor, so a request from a device with no network never looks like one
+      // that is in flight - it never left.
+      reachable();
+      await interceptor?.(name as keyof typeof answers);
+      return (call as (...rest: unknown[]) => unknown)(...args);
+    },
+  ]),
+) as typeof answers;

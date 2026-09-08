@@ -3,9 +3,9 @@
  *
  * This used to live inside `VaultPage` as a `useCallback` and a `useEffect`, which meant the part
  * of the client most able to lose someone's work was the part that could not be tested at all. It
- * is plain functions over a `VaultStore` and a state object now: the workspace holds one
- * `EditorState` in React state and swaps it for whatever these return, and `tests/merge.test.ts`
- * drives the same functions against a fake server.
+ * is plain functions over a `VaultStore` and the editor now: the workspace holds one `EditorState`
+ * and hands these an `EditorAccess` onto it, and `tests/merge.test.ts` and `tests/typing.test.ts`
+ * drive the same functions against a fake server.
  *
  * Nothing here touches React, the DOM, or the network directly - the store owns all three.
  */
@@ -49,6 +49,28 @@ export interface EditorState {
  */
 export function isOffline(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { status?: unknown }).status === 0;
+}
+
+/**
+ * The editor state, as the functions below read and write it.
+ *
+ * Every one of them goes to the server in the middle, and the person on the other end of the round
+ * trip is still typing. A state read before that request is a state one or more keystrokes old, so
+ * nothing here may build its answer out of one: read again after the last await, and write the
+ * result in the same breath, with nothing in between that could yield. What is on screen then only
+ * ever moves forwards - which is the whole difference between a save happening and a save undoing
+ * the word that was just typed. `tests/typing.test.ts` is that rule, one test per request.
+ *
+ * These used to take an `EditorState` and return a new one, which reads more simply and is exactly
+ * the bug: a value handed in before a request and a value applied wholesale after it are, between
+ * them, a window that swallows everything typed during it.
+ *
+ * `read` is the workspace's ref rather than its React state: the state a render has not happened
+ * for yet would be precisely the keystroke this is trying not to lose.
+ */
+export interface EditorAccess {
+  read(): EditorState;
+  write(next: EditorState): void;
 }
 
 /**
@@ -105,7 +127,8 @@ export function opened(store: VaultStore, noteId: string): EditorState {
  * Brings the editor into line with the store after new versions arrive - from another device, or
  * from the pull that follows opening a cached vault.
  *
- * Returns the state unchanged when there is nothing to do, so a caller can compare by identity.
+ * Writes nothing when there is nothing to do, so a vault that is already up to date does not
+ * re-render the workspace on every notification.
  *
  * The decision this makes is the one thing in the client that can silently destroy an edit, so it
  * is worth stating plainly. There are three cases, not two:
@@ -126,57 +149,75 @@ export function opened(store: VaultStore, noteId: string): EditorState {
 export async function reconcile(
   store: VaultStore,
   noteId: string,
-  state: EditorState,
-): Promise<EditorState> {
-  const remoteHead = store.headOf(noteId);
-  const base = state.baseline;
+  editor: EditorAccess,
+): Promise<void> {
+  // Around the fetches rather than inside them: what is fetched depends on the baseline and on the
+  // head, and either can move while the fetching is going on - a save landing, another device's
+  // change arriving. Anything that moves is a reason to work the answer out again rather than to
+  // apply one that was true a moment ago.
+  for (;;) {
+    const state = editor.read();
+    const remoteHead = store.headOf(noteId);
+    const base = state.baseline;
 
-  if (!remoteHead || remoteHead === base) {
-    return state;
-  }
+    if (!remoteHead || remoteHead === base) {
+      return;
+    }
 
-  // The new head is metadata until its ciphertext is here, and so is the version this editor has
-  // been working from - two chains, named rather than fetched as "the whole note" as this once was.
-  await store.ensureVersions([remoteHead, base]);
+    // The new head is metadata until its ciphertext is here, and so is the version this editor has
+    // been working from - two chains, named rather than fetched as "the whole note" as this once was.
+    await store.ensureVersions([remoteHead, base]);
 
-  const remoteText = store.materialise(remoteHead);
-  const baseText = base ? store.materialise(base) : '';
-  const unsent = state.text !== baseText;
+    // Where the two branches diverged. Asked for separately because there is no knowing which
+    // version it will be until they are walked, and it can be far enough back to share no chain
+    // with either of them. Both of these are worked out from ids alone, so neither depends on what
+    // the editor holds - which is what lets every text decision below wait until the fetching is
+    // finished.
+    const ancestorId = base ? store.commonAncestor(base, remoteHead) : null;
+    await store.ensureVersions([ancestorId]);
 
-  // No baseline at all means this editor is not holding a version to lose.
-  if (base === null || (!unsent && store.descendsFrom(remoteHead, base))) {
-    return {
-      ...state,
-      text: remoteText,
+    // The last await is above this line. Everything from here to the write is synchronous, so the
+    // text being merged is the text on the screen and cannot be overtaken between the two.
+    const current = editor.read();
+    if (current.baseline !== base || store.headOf(noteId) !== remoteHead) {
+      continue;
+    }
+
+    const remoteText = store.materialise(remoteHead);
+    const baseText = base ? store.materialise(base) : '';
+    const unsent = current.text !== baseText;
+
+    // No baseline at all means this editor is not holding a version to lose.
+    if (base === null || (!unsent && store.descendsFrom(remoteHead, base))) {
+      editor.write({
+        ...current,
+        text: remoteText,
+        baseline: remoteHead,
+        mergeParent: null,
+        conflicted: false,
+        status: 'saved',
+        error: null,
+      });
+      return;
+    }
+
+    // Merge against where the two branches diverged. `current.text` is "ours" whether it was saved
+    // or not: on a fork, our own saved version is a branch the other side has never seen either.
+    const ancestorText = ancestorId ? store.materialise(ancestorId) : baseText;
+    const merged = merge(ancestorText, current.text, remoteText);
+
+    editor.write({
+      ...current,
+      text: merged.text,
+      conflicted: merged.conflicted,
+      // The branch we came from, so the version written next records both sides of the fork.
+      mergeParent: base,
       baseline: remoteHead,
-      mergeParent: null,
-      conflicted: false,
-      status: 'saved',
+      status: 'saving',
       error: null,
-    };
+    });
+    return;
   }
-
-  // Merge against where the two branches diverged. `state.text` is "ours" whether it was saved or
-  // not: on a fork, our own saved version is a branch the other side has never seen either.
-  const ancestorId = base ? store.commonAncestor(base, remoteHead) : null;
-
-  // Asked for separately because there was no knowing which version it would be until the two
-  // branches were walked, and it can be far enough back to share no chain with either of them.
-  await store.ensureVersions([ancestorId]);
-
-  const ancestorText = ancestorId ? store.materialise(ancestorId) : baseText;
-  const merged = merge(ancestorText, state.text, remoteText);
-
-  return {
-    ...state,
-    text: merged.text,
-    conflicted: merged.conflicted,
-    // The branch we came from, so the version written next records both sides of the fork.
-    mergeParent: base,
-    baseline: remoteHead,
-    status: 'saving',
-    error: null,
-  };
 }
 
 /** Whether `text` is something the server has not got. */
@@ -199,32 +240,47 @@ export function unsaved(store: VaultStore, noteId: string, state: EditorState): 
 export async function commit(
   store: VaultStore,
   noteId: string,
-  state: EditorState,
-): Promise<EditorState> {
+  editor: EditorAccess,
+): Promise<void> {
+  const state = editor.read();
+
   if (!unsaved(store, noteId, state)) {
     store.dropDraft(noteId);
-    return state.status === 'saved' ? state : { ...state, status: 'saved', error: null };
+    if (state.status !== 'saved') {
+      editor.write({ ...state, status: 'saved', error: null });
+    }
+    return;
   }
 
   try {
     await store.saveNote(noteId, state.text, { mergeParentId: state.mergeParent });
     store.dropDraft(noteId);
 
-    return {
-      ...state,
+    // The other side of the round trip. What the editor holds now is what was typed during it, and
+    // only the bookkeeping below is this function's to change - the text is the user's.
+    const current = editor.read();
+    editor.write({
+      ...current,
       baseline: store.headOf(noteId),
+      // Recorded by the version just written, whatever has been typed since.
       mergeParent: null,
-      status: 'saved',
+      // A keystroke made while the request was out is not on the server, and the indicator says so
+      // rather than claiming everything is safe. The autosave that keystroke armed writes it next.
+      status: unsaved(store, noteId, current) ? 'saving' : 'saved',
       error: null,
-    };
+    });
   } catch (e: unknown) {
-    store.keepDraft(noteId, state.text);
+    const current = editor.read();
 
-    return {
-      ...state,
+    // The draft is what survives a reload, so it is the text as it is now rather than the text that
+    // was refused - they differ by whatever was typed while the request was failing.
+    store.keepDraft(noteId, current.text);
+
+    editor.write({
+      ...current,
       status: isOffline(e) ? 'offline' : 'error',
       error: e instanceof Error ? e.message : String(e),
-    };
+    });
   }
 }
 
@@ -239,14 +295,16 @@ export async function commit(
 export async function resync(
   store: VaultStore,
   noteId: string | null,
-  state: EditorState,
-): Promise<EditorState> {
+  editor: EditorAccess,
+): Promise<void> {
   await store.pull();
 
   if (!noteId) {
-    return state;
+    return;
   }
 
-  const reconciled = await reconcile(store, noteId, state);
-  return commit(store, noteId, reconciled);
+  // Each step reads the editor for itself, which is what makes the pull above safe to type through:
+  // the merge sees the sentence that was finished while it was running, and the save sends it.
+  await reconcile(store, noteId, editor);
+  await commit(store, noteId, editor);
 }
