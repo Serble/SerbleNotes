@@ -1,0 +1,48 @@
+[package]
+name = "serblenotes-fuse"
+version = "0.1.0"
+edition = "2021"
+description = "Mounts a Serble Notes vault as a directory of markdown files"
+license = "MIT"
+
+# Deliberately not a cargo workspace member with the core. The core is built for wasm by wasm-pack
+# and natively by `cargo test`, both from its own directory, and a workspace would move its target
+# directory out from under both of them. A path dependency needs none of that.
+[lib]
+name = "serblenotes_fuse"
+path = "src/lib.rs"
+
+[[bin]]
+name = "serblenotes-fuse"
+path = "src/main.rs"
+
+[dependencies]
+# The only door to crypto, diffing, replay, merging and note paths. Nothing in this crate
+# reimplements any of it - see the working agreements in CLAUDE.md.
+serblenotes-core = { path = "../SerbleNotes.Core" }
+
+# default-features = false leaves out the `libfuse` feature, so building this needs no libfuse
+# headers and mounting goes through the `fusermount3` binary that every distribution ships with
+# FUSE itself. Installing a -devel package to build a filesystem client is a step nobody should
+# have to find out about from a linker error.
+fuser = { version = "0.18", default-features = false }
+
+# Blocking HTTP. There is no async anywhere in this crate on purpose: a FUSE callback is a blocking
+# call from the kernel, so a runtime underneath it would only be a way to wait twice.
+ureq = { version = "2.12", features = ["json", "native-certs"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+dirs = "6"
+glob = "0.3"
+getrandom = "0.2"
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
+percent-encoding = "2"
+rpassword = "7"
+
+[profile.release]
+opt-level = 2

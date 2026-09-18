@@ -80,6 +80,32 @@ every note, and the server storing it all only ever holds ciphertext.
 - **Local-first.** Every client works fully offline and reconciles on reconnect.
 - **Deletes are tombstones**, so a device that was away still learns what happened.
 
+## Any editor
+
+- **`serblenotes-fuse` mounts a vault as a folder of markdown files**, so a vault can be edited with
+  whatever editor you already use - vim, VS Code, Obsidian, `sed -i`, anything that opens a file.
+- **Closing a file after writing to it appends a version.** Every save is a point in the history,
+  exactly as it is in the app.
+- **It is the same Rust core**, linked natively rather than compiled to WASM, so the filesystem and
+  the app can never disagree about what a stored version means. The server sees the same ciphertext
+  either way.
+- **A file an editor makes for itself stays in the mount.** Swap files, lock files, backups and the
+  temporary an atomic save renames into place never become notes. Saving over a note is taken as a
+  new version of it, and an editor that renames the original out of the way first gets a copy -
+  either way the note keeps one unbroken history. `--ignore <GLOB>` adds names of your own.
+- **Edits made offline are kept, sealed, and sent when the connection comes back**, across unmounts.
+
+- **Nothing has to be typed.** Every prompt has a flag and an environment variable behind it, so a
+  mount comes up from a script or a unit file with stdin closed.
+
+```fish
+serblenotes-fuse login
+serblenotes-fuse mount "My vault" ~/notes    # Ctrl-C unmounts
+
+# Or, entirely unattended:
+serblenotes-fuse --token $JWT -q mount $VAULT ~/notes --password-stdin --mkdir < ~/.vault-password
+```
+
 ## Import and export
 
 - **A vault exports as a zip of markdown files**, one per note, with real directories for folders.
@@ -95,6 +121,7 @@ every note, and the server storing it all only ever holds ciphertext.
 - **`SerbleNotes.Core`** - Rust. Crypto, diffing, merging, paths. 125 tests.
 - **`SerbleNotes.App`** - React + TypeScript + Vite.
 - **`SerbleNotes.App/src-tauri`** - the Tauri v2 shell for Linux, Windows, macOS and Android.
+- **`SerbleNotes.Fuse`** - Rust. The FUSE filesystem and its CLI.
 
 ## Running it
 
@@ -112,6 +139,9 @@ cd SerbleNotes.App; npm run dev
 cd SerbleNotes.App; npm run desktop
 cd SerbleNotes.App; npm run android
 
+# The filesystem. Needs no libfuse headers - mounting goes through fusermount3.
+cd SerbleNotes.Fuse; cargo build --release
+
 # Production: one command builds the core, the client and the backend together.
 dotnet publish SerbleNotes.Backend -c Release -o out
 ```
@@ -121,6 +151,5 @@ dotnet publish SerbleNotes.Backend -c Release -o out
 - **File attachments**, which need object storage.
 - **The Redis backplane.** Sync fans out in-process, which is right for one instance and wrong for
   two.
-- **The FUSE filesystem**, for editing a vault in any editor.
 - **Re-keying a vault.** A password change re-wraps the existing key; replacing it would mean
   rewriting every note name and every stored version.

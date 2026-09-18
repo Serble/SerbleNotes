@@ -1,7 +1,7 @@
 //! Note paths.
 //!
 //! A note has one name, and a `/` in it means a folder. There are no folder records anywhere: the
-//! tree the sidebar draws is derived from the names, and the tree the FUSE filesystem will mount is
+//! tree the sidebar draws is derived from the names, and the tree the FUSE filesystem mounts is
 //! derived the same way from the same function. That is the point of putting this in the core -
 //! if the clients and the filesystem disagreed about what "Work/Notes" means, the same note would
 //! appear in two places.
@@ -10,7 +10,7 @@ use crate::crypto::CoreError;
 use wasm_bindgen::prelude::*;
 
 /// Longest a single path segment may be, in bytes. This is not a limit we invented: most
-/// filesystems, including the ones FUSE will sit on top of, cannot represent a longer component.
+/// filesystems, including the one FUSE sits next to, cannot represent a longer component.
 pub const MAX_SEGMENT_BYTES: usize = 255;
 
 /// Cleans up a path the user typed: trims whitespace around each segment, collapses repeated
@@ -66,7 +66,7 @@ pub fn file_name(path: &str) -> String {
 }
 
 /// Segments that are too long for a real filesystem to store. Reported so the UI can say so, not
-/// so anything can be refused - the note still saves, and FUSE will shorten what it must.
+/// so anything can be refused - the note still saves, and the mount leaves out what it cannot name.
 #[wasm_bindgen]
 pub fn oversized_segments(path: &str) -> Vec<String> {
     path.split('/')
@@ -80,7 +80,7 @@ pub fn oversized_segments(path: &str) -> Vec<String> {
 /// else on the machine.
 pub const NOTE_EXTENSION: &str = ".md";
 
-/// Where a note lives inside an exported archive, and where the filesystem will show it.
+/// Where a note lives inside an exported archive, and where the mounted filesystem shows it.
 ///
 /// The rule is deliberately dumb and therefore reversible: the whole note name is the file's stem
 /// and `.md` is added on the way out. A note actually called `todo.md` becomes `todo.md.md`, which

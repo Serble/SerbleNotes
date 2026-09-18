@@ -8,8 +8,8 @@ shapes that hold everywhere, and the things that will waste a day if you do not 
 about one component lives in comments next to that component; read the code before changing it.
 
 **Status: MVP built and working.** Vaults, notes, the version DAG, live sync, zip import/export, the
-web client and the Tauri shell all exist. Deliberately *not* built yet: file attachments and S3
-(needs MinIO), the Redis backplane, and the FUSE filesystem.
+web client, the Tauri shell and the FUSE filesystem all exist. Deliberately *not* built yet: file
+attachments and S3 (needs MinIO), and the Redis backplane.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ Monorepo. Everything lives here:
 | `SerbleNotes.Core/` | Rust crate: crypto, diffing, merge, replay. Compiles native (rlib) and to WASM. |
 | `SerbleNotes.App/` | React + TS client. Built into the backend's `wwwroot` for the web, and wrapped by the Tauri shell for desktop and Android. |
 | `SerbleNotes.App/src-tauri/` | The Tauri v2 shell: Linux, Windows, macOS and Android. Thin - see "The native clients". |
-| `SerbleNotes.Fuse/` | (not built) Linux FUSE filesystem so a vault can be edited in any editor. |
+| `SerbleNotes.Fuse/` | Rust CLI: mounts a vault as a folder of markdown files, so it can be edited in any editor. |
 
 Infrastructure: **MySQL** (metadata, EF Core migrations) is in use today. **MinIO / S3** (attachment
 blobs) and **Redis** (pub/sub fan-out across backend instances) are designed for but not yet wired
@@ -88,8 +88,8 @@ next autosave then wrote over the real one.
 
 A note has one name, and a `/` in it is a folder. `Work/Projects/Alpha` puts Alpha inside Projects
 inside Work. **There are no folder records anywhere** - not in the database, not in the client. The
-tree the sidebar draws is derived from the names, and so is the tree the FUSE filesystem will mount
-(the same function in `path.rs`). Nothing to create before filing a note, nothing to clean up when
+tree the sidebar draws is derived from the names, and so is the tree the FUSE filesystem mounts (the
+same function in `path.rs`). Nothing to create before filing a note, nothing to clean up when
 the last note leaves, and no second structure that can drift out of step with the first.
 
 - **The name is ciphertext**, sealed with the vault key and stored in `Note.Name` as a blob, so
@@ -112,7 +112,7 @@ the last note leaves, and no second structure that can drift out of step with th
 ### Archives: a vault is a folder of markdown files
 
 Export writes the vault as a zip - one `.md` file per note, real directory entries for folders - and
-import reads one back. **This is the layout the FUSE filesystem will mount**, which is why
+import reads one back. **This is the layout the FUSE filesystem mounts**, which is why
 `archive_path` and `note_name_from_archive_path` live in `path.rs` with everything else that decides
 where a note lives. The whole note name is the file's stem and `.md` is added on the way out and
 taken off on the way in, so `todo.md` becomes `todo.md.md` - ugly, and the only reversible mapping.
@@ -301,6 +301,88 @@ do:
   `WEBKIT_DISABLE_DMABUF_RENDERER=1` when running under Wayland *and* `/sys/module/nvidia_drm` exists;
   setting the variable yourself always wins.
 
+### The filesystem
+
+`SerbleNotes.Fuse` is a Rust CLI that mounts a vault as a folder of markdown files: `login` once per
+machine, `mount <vault> <dir>` per vault. It links the **same core natively** that the browser loads
+as WASM, so the filesystem and the app cannot disagree about what a stored version means. It talks
+to the same routes the web client does and adds none.
+
+**Which server it talks to is a build-time decision**, the same one the packaged clients make with
+`VITE_API_BASE_URL`: `config::BUILT_IN_SERVER` is `https://notes.serble.net` unless
+`SERBLENOTES_SERVER_URL` is set when compiling. It is the last resort in `config::choose_server` -
+`--server`, then `SERBLENOTES_SERVER`, then a saved session, then the build - and `login` writes the
+address down only when the run actually named one, so a copy built for somewhere else is not pinned
+to whatever it happened to reach first.
+
+**Every value it would otherwise ask a terminal for has a flag and an environment variable**, so a
+mount can be brought up by a script or a unit file with stdin closed: `--server`, `--token` (which
+skips `login` entirely), `login --code`, and `mount --password` / `--password-stdin` /
+`SERBLENOTES_VAULT_PASSWORD`. `--mkdir` makes the mount point, `--ignore` adds to the list of names
+that are never notes, `--quiet` drops the routine output.
+A password on a command line is visible in `ps`, which is said once, factually, without refusing it
+- and an empty password is a real password, so nothing anywhere treats empty as absent.
+
+**Closing a file after writing to it is what appends a version.** That is the whole product: edit a
+note in whatever editor you already have, and every save is a point in its history.
+
+- **A note is the file `archive_path(name)`**, the same place it appears in an exported zip, and a
+  file is a note only if that mapping comes back to the same name - which in practice means a
+  lowercase `.md`. Anything else would rename itself under the editor that made it.
+- **A file that is not a note lives in the mount and nowhere else.** This is the load-bearing idea.
+  Saving a file is rarely a write to it: `sed -i` writes `sedA1B2C3` beside it and renames it over
+  the top, GNOME writes `.goutputstream-...`, vim writes `4913` to see whether it can create files
+  at all. Refusing those names would refuse `sed -i`; turning them into notes would fill the vault
+  with swap files. They live in the mount, and renaming one onto a note's name is what commits it.
+  The built-in list can only ever hold the shapes somebody thought of, so `mount --ignore <GLOB>`
+  adds to it - name-only without a `/`, whole-path with one, `*` stopping at `/` as in a
+  `.gitignore`.
+- **A rename onto an existing note is a new version of that note**, not a delete and a create. Every
+  graphical editor saves that way, and reading it the obvious way destroys the history of every note
+  they touch.
+- **A note renamed to an editor's own name is copied there, and does not move.** The other half of
+  the same dance: nvim with `backupcopy=no` renames `Things.md` to `Things.md~` and then writes a
+  new `Things.md`. Moving the note really - tombstoning it and leaving the text as a file - left the
+  name free, so that write made a *second* note and cut a months-old history in half, findable only
+  by restoring a deletion nobody knew about. The note stays put; the backup is a copy; the editor's
+  next write is an open of the note, because the kernel looks a name up before it creates one. A
+  rename to any *other* non-note name is refused instead, since no reading of it keeps the note.
+- **A rename moves the source's inode to the new name.** POSIX, and not optional: keeping the
+  destination's left the kernel holding an inode that had just been discarded, and a note saved by
+  `sed -i` read back as "no such file". `tests/mounted.rs` is what found it.
+- **`flush` only saves when something has been written since the last save.** `flush` runs on every
+  `close`, and a `close` is not a program finishing with a file - `sh` opens a redirect, dups it onto
+  stdout and closes the original, so the first flush of `printf x > note.md` arrives before a byte
+  does, on a buffer just truncated to nothing. Committing that wrote an empty version into every
+  save. `release` still saves unconditionally, so truncating a note to nothing is not lost.
+- **Unmounting is done by running `fusermount3`, not by `fuser`.** Built without libfuse, fuser
+  unmounts by shelling out to `fusermount3` and returning `Ok` whatever it said - so a mount point
+  something still had a file open in reported a clean unmount and then blocked forever in `join()`.
+  Ctrl-C appeared to hang, with nothing said. It now reports the refusal, keeps retrying so that
+  closing the editor is enough on its own, and takes a second Ctrl-C as "detach it anyway" - after
+  which it does not `join`, because the worker can still be parked on somebody else's descriptor.
+- **`getattr` blocks on rebuilding the note**, because `st_size` is the length of the *plaintext* and
+  the server only knows how much ciphertext it holds. The sync thread warms every note in the
+  background so `ls -l` is not a download.
+- **Remote changes are polled**, not pushed: `/changes` every `--interval` seconds (10 by default).
+  **Warming runs on its own thread**, not before the loop: it is one request per note, so on a vault
+  of any size against a distant server it used to be minutes during which no poll ran at all and the
+  mount quietly noticed nothing anybody else did.
+  A note that moved under an open buffer is three-way merged, never overwritten - and a sibling is a
+  fork whether or not anything is unsent, which is the case that used to lose a device's own saved
+  work.
+- **An edit the server would not take is sealed into the cache directory and retried**, including
+  across mounts. Offline is not an error the editor is told about; a refusal is.
+- **The vault key is kept in a 0600 file, not a keychain**, and every place that offers to remember
+  one says so. A mount usually runs where there is no session bus, and a keychain that cannot be
+  reached is worse than a file because it makes the promise and does not keep it.
+- **`http://127.0.0.1:41780/auth/callback` has to be on the Serble application registration**, the
+  same way the native scheme does, or `login` fails with `redirect-uri-mismatch` before the consent
+  screen. The port is fixed because a registration is an exact string. `--no-browser` prints the URL
+  and takes the redirected address back, which is what works over SSH.
+- **Building needs no libfuse headers.** `fuser` is used with `default-features = false`, so mounting
+  goes through the `fusermount3` binary every distribution ships with FUSE itself.
+
 ## ASCII only, and icons are SVG
 
 **Every character we write is ASCII.** No em dashes, no ellipsis character, no arrows, no curly
@@ -350,6 +432,7 @@ set them high enough that nobody ordinary meets them, and fail with a clear reas
 cd SerbleNotes.Core; cargo test              # ~25s
 dotnet test SerbleNotes.Backend.Tests
 cd SerbleNotes.App; npm test                 # node's own runner over SerbleNotes.App/tests
+cd SerbleNotes.Fuse; cargo test              # ~5s
 ```
 
 **The core is held to a stricter standard than the rest of the repo** - it holds the only copy of the
@@ -370,6 +453,32 @@ a caller mutate a row and forget to save it, so the test meant to prove the save
 nothing. **Error message text is deliberately not asserted** - the status code is the contract, the
 sentence is not.
 
+The filesystem's tests come in four shapes, and which shape a thing is tested in is the decision
+worth getting right.
+
+- **`tests/mount.rs` and `tests/store.rs`** drive `Mount` and `VaultStore` against the in-memory
+  server in `tests/support`. The FUSE callbacks do nothing but turn inode numbers into paths and
+  call `Mount`'s methods, so this is where the operations are.
+- **`tests/api.rs`** runs against a real HTTP server on a real socket (`tests/support/stub.rs`).
+  `api.rs` is the one module with no seam a fake can go under - everything below it is `ureq`, the
+  URLs, the headers and the shapes `serde` makes of the JSON - and a `Backend` fake proves none of
+  it. This is where a field renamed on the server, or a status read the wrong way round, shows up.
+- **`tests/mounted.rs`** mounts for real and uses the mount with `ls`, `cat`, `mv`, `sed -i` and a
+  shell redirect. It skips where there is no `/dev/fuse`. **It has the best bug-per-test rate in
+  this repo by a distance**: both bugs that reached a real vault were invisible to the direct tests
+  and obvious the first time a kernel and a real program were involved. Anything about what the
+  *kernel* does around a save belongs here. Every test holds its mount through a guard whose `Drop`
+  unmounts and then detaches, because a test that panics must not leave a mount on the machine.
+- **`tests/cost.rs`** asserts what a vault costs to open and to list - that drawing the tree
+  downloads no bodies, that a note is fetched once - by counting requests rather than timing
+  anything. A timing assertion on a build machine is a test that fails for reasons nobody can act on.
+
+**The CLI itself is deliberately thin.** Everything in `main.rs` that decides something is lifted
+into the library where it can be tested: `config::choose_server` and `choose_token`, `vaults::find`,
+`unlock::password_source`, `mountpoint::take_down` and `check`, `api::describe`. What is left is
+clap declarations and wiring against a real server. When something in `main.rs` starts making a
+decision, move it out rather than leaving it where nothing can reach it.
+
 The client's tests cover the pieces that can be *wrong* rather than broken: the store against
 `support/fakeServer.ts` with the real core doing the crypto, paths and archives, the table layout that
 rewrites the user's text, the diff reader, conflict parsing, CSS scoping, paste conversion and date
@@ -389,7 +498,24 @@ Coverage says a line ran; mutation testing says whether anything would have noti
 cd SerbleNotes.Backend.Tests; dotnet stryker      # ~40s
 cd SerbleNotes.App; npm run test:mutants          # one module, ~70s
 cd SerbleNotes.Core; cargo mutants -j 4           # ~4 min
+cd SerbleNotes.Fuse; cargo mutants -j 4           # ~45 min, 540 mutants
 ```
+
+On the filesystem it has already earned its keep. It found two functions nothing called at all, a
+restored edit that could be stranded on a tombstoned note forever, and a `rmdir` that took a
+folder's parents with it; the survivor list is what the suite was written against, rather than a
+guess about what might be untested. The score went 58% to 81% on the back of it.
+
+Three things to know before reading its report there:
+
+- **Mutants in the `impl Filesystem` callbacks show as survivors.** Only `tests/mounted.rs` reaches
+  them and it needs `/dev/fuse`, which it does not reliably get inside the sandbox. They are covered;
+  the report cannot see it.
+- **It leaves mounts behind.** Some mutants break the unmount path by design, so a run can strand
+  FUSE mounts on the machine. Afterwards:
+  `for m in (mount | grep -oP 'on \K[^ ]+' | grep serblenotes); fusermount3 -u -z $m; end`
+- **A message string is not worth pinning** - see the rule below. A good share of what is left is
+  `replace X -> String with "xyzzy".into()` on something whose only job is to be read by a person.
 
 **A surviving mutant is a question, not a defect.** Three kinds show up: a real gap (fix it), an
 equivalent mutant that cannot change behaviour (leave it, say why), and something not worth pinning -
@@ -454,6 +580,23 @@ cd SerbleNotes.App; npm run android:init
 cd SerbleNotes.App; npm run android
 cd SerbleNotes.App; npm run android:build -- --apk --debug
 cd SerbleNotes.App; npm run android:build -- --aab --apk   # signed, if keystore.properties exists
+
+# The filesystem. Needs no libfuse headers; mounting uses the fusermount3 binary.
+# Talks to notes.serble.net unless --server, SERBLENOTES_SERVER or a saved session says otherwise.
+cd SerbleNotes.Fuse; cargo build --release
+set -x PATH ./SerbleNotes.Fuse/target/release $PATH
+serblenotes-fuse login                                  # --server http://localhost:5179 for dev
+serblenotes-fuse vaults
+serblenotes-fuse mount <vault> ~/notes                  # Ctrl-C unmounts
+
+# The same thing with nothing to type, for a script or a unit file.
+serblenotes-fuse --token $JWT -q mount $VAULT ~/notes --password-stdin --mkdir < ~/.vault-password
+
+# Names this mount should leave alone, on top of the editors it already knows about.
+serblenotes-fuse mount $VAULT ~/notes --ignore '*.bak' --ignore 'Drafts/**'
+
+# A build for a different deployment.
+cd SerbleNotes.Fuse; SERBLENOTES_SERVER_URL=https://notes.example.com cargo build --release
 
 # Production shape: one command builds the core, the client and the backend together.
 dotnet publish SerbleNotes.Backend -c Release -o out

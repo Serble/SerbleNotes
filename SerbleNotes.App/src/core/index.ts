@@ -162,7 +162,7 @@ export function merge(ancestor: string, ours: string, theirs: string): MergeResu
 
 // --- note paths ---------------------------------------------------------------------------------
 // Folders are not stored anywhere; they are read out of note names. These functions decide what the
-// tree looks like, and the FUSE filesystem will call the same ones, so the two can never disagree.
+// tree looks like, and the FUSE filesystem calls the same ones, so the two can never disagree.
 
 /** Tidies a name the user typed. Throws only for names no filesystem could hold. */
 export function normalisePath(raw: string): string {
@@ -190,8 +190,8 @@ export function reparent(path: string, oldParent: string, newParent: string): st
 }
 
 /**
- * Where a note lives inside an exported archive, and where the filesystem will show it: the whole
- * note name, with `.md` on the end. A note called `todo.md` becomes `todo.md.md`, which is what
+ * Where a note lives inside an exported archive, and where the mounted filesystem shows it: the
+ * whole note name, with `.md` on the end. A note called `todo.md` becomes `todo.md.md`, which is what
  * makes the mapping reversible - see the crate for why that matters more than how it looks.
  */
 export function archivePath(name: string): string {
