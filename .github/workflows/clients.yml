@@ -1,43 +1,87 @@
 name: Clients
 
-# Builds the desktop and Android clients.
+# Builds the desktop and Android clients, and optionally releases them.
 #
 # The Windows installer is the reason this exists: Tauri has no supported way to cross-compile a
 # Windows app from Linux, so a Windows runner is how a Windows build gets made without owning a
-# Windows machine. Linux and Android build fine locally; they are here so a tagged release produces
-# all of them at once, from the same commit.
+# Windows machine. Linux and Android build fine locally; they are here so a release produces all of
+# them at once, from the same commit.
+#
+# No `push: tags` trigger: the version lives in tauri.conf.json, because that is where Android's
+# versionCode comes from, so a hand-written tag is a second copy of it that can disagree.
 #
 # VITE_API_BASE_URL has to be set as a repository variable: a packaged app is not served by the
-# backend, so it has nowhere to look for it. The Serble application id comes from that server once
-# the app can reach it, so there is nothing else to configure for a build.
+# backend, so it has nowhere to look for it, and `platform.ts` has no runtime fallback - a build
+# without it shows "this build is incomplete" on the sign-in screen. The Serble application id comes
+# from that server once the app can reach it, so there is nothing else to configure for a build.
 #
 # Publishing to Google Play needs four secrets for the signing key and one for the API, all listed
-# under "Releasing to Google Play" in CLAUDE.md. Without them this workflow still builds - it falls
-# back to the debug APK it built before there was a key - so a fork, or a clone with no secrets set,
-# is not a workflow that fails.
+# under "Releasing" in CLAUDE.md. Without them this workflow still builds - it falls back to the
+# debug APK it built before there was a key - so a fork, or a clone with no secrets set, is not a
+# workflow that fails.
 #
-# A tag publishes to the internal track and no further. Promoting a build to production stays a
-# decision somebody makes in the Play Console, in front of the release notes and the rollout
-# percentage, rather than something a `git push --tags` does on their behalf.
+# Play goes no further than the track chosen here, and `internal` is the default. Promoting a build
+# to production stays a decision somebody makes in the Play Console, in front of the release notes
+# and the rollout percentage.
 
 on:
   workflow_dispatch:
     inputs:
+      release:
+        description: Create a GitHub release, tagged with the version in tauri.conf.json
+        type: boolean
+        default: false
       publish:
-        description: Publish to Google Play as well as building
+        description: Publish to Google Play as well
         type: boolean
         default: false
       track:
-        description: Which track to publish to (ignored unless publishing)
+        description: Which Play track (ignored unless publishing)
         type: choice
         options: [internal, alpha, beta, production]
         default: internal
-  push:
-    tags: ['v*']
 
 jobs:
+  preflight:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Play never forgets a versionCode, so a version released once can never be released again.
+      # Finding that out here costs a minute; finding it out after the build costs an hour.
+      - name: Read the version
+        id: version
+        working-directory: SerbleNotes.App/src-tauri
+        env:
+          RELEASING: ${{ inputs.release }}
+          PUBLISHING: ${{ inputs.publish }}
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('tauri.conf.json'))['version'])")
+          tag="v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "tauri.conf.json says $version, so the tag is $tag."
+
+          if [ "$RELEASING" != "true" ] && [ "$PUBLISHING" != "true" ]; then
+            echo "Building only - nothing will be tagged or uploaded."
+            exit 0
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::$tag already exists, so $version has been released before."
+            echo "::error::Bump the version in SerbleNotes.App/src-tauri/tauri.conf.json, commit and push, then run this again."
+            exit 1
+          fi
+          echo "$tag is free."
+
   desktop:
     name: Desktop (${{ matrix.name }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -102,6 +146,7 @@ jobs:
 
   android:
     name: Android
+    needs: preflight
     runs-on: ubuntu-latest
 
     # The `secrets` context cannot be read from an `if`, so whether each half of the release is
@@ -143,23 +188,6 @@ jobs:
       - name: Install dependencies
         working-directory: SerbleNotes.App
         run: npm ci
-
-      # Android's versionCode is derived from the app version by Tauri, and Play refuses an upload
-      # carrying a versionCode it has already seen. So a tag that does not match the version in
-      # tauri.conf.json either publishes a build named after the wrong release or is rejected an
-      # hour later by the API - both of which are worth catching here, before anything is compiled.
-      - name: Check the tag matches the app version
-        if: startsWith(github.ref, 'refs/tags/')
-        working-directory: SerbleNotes.App/src-tauri
-        run: |
-          tagged="${GITHUB_REF_NAME#v}"
-          declared=$(python3 -c "import json; print(json.load(open('tauri.conf.json'))['version'])")
-          if [ "$tagged" != "$declared" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME is version $tagged, but tauri.conf.json says $declared."
-            echo "::error::Bump tauri.conf.json to $tagged and retag, or tag v$declared instead."
-            exit 1
-          fi
-          echo "Releasing $declared (Android versionCode is derived from it)."
 
       # Written where the template's own .gitignore already expects a key, so nothing here can be
       # committed by accident. The file is Java's .properties format, in which a backslash escapes
@@ -232,14 +260,83 @@ jobs:
       # The mapping file goes up with it because the release build is minified: without it every
       # crash report from a real phone is a stack of obfuscated names.
       - name: Publish to Google Play
-        if: >-
-          env.HAS_KEYSTORE == 'true' && env.HAS_PLAY_KEY == 'true'
-          && (github.event_name == 'push' || inputs.publish)
+        if: env.HAS_KEYSTORE == 'true' && env.HAS_PLAY_KEY == 'true' && inputs.publish
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: net.serble.notes
           releaseFiles: SerbleNotes.App/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
           mappingFile: SerbleNotes.App/src-tauri/gen/android/app/build/outputs/mapping/universalRelease/mapping.txt
-          track: ${{ github.event_name == 'push' && 'internal' || inputs.track }}
+          track: ${{ inputs.track }}
           status: completed
+
+  # Creating the release is what creates the tag, at the commit this run built - so a tag never names
+  # a commit whose Windows build failed.
+  release:
+    name: GitHub release
+    needs: [preflight, desktop, android]
+    if: inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # Android only: the desktop bundles stay run artifacts for now. Dropping the `name` ships them
+      # too, because the step below takes whatever it is given.
+      - uses: actions/download-artifact@v4
+        with:
+          name: android
+          path: artifacts
+
+      # Flattened and de-spaced, minus the AAB, which is what Play takes and what no phone can
+      # install. The APK is renamed because Tauri names it after a Gradle flavour rather than the
+      # product, and `app-universal-release.apk` says nothing in somebody's downloads folder.
+      - name: Collect the installers
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          mkdir -p release
+
+          apk=$(find artifacts -name '*.apk' -path '*universal*' | head -1)
+          if [ -z "$apk" ]; then
+            echo "::error::No universal APK in the Android artifact."
+            exit 1
+          fi
+          cp "$apk" "release/Serble.Notes_${VERSION}_android-universal.apk"
+
+          find artifacts -type f ! -name '*.apk' ! -name '*.aab' -print0 |
+            while IFS= read -r -d '' file; do
+              cp "$file" "release/$(basename "$file" | tr ' ' '.')"
+            done
+
+          ls -la release
+
+      # On the page where somebody is about to download the wrong one of the two.
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          ## Install
+
+          **Android** - \`Serble.Notes_${VERSION}_android-universal.apk\`. One file, every
+          architecture. Point [Obtainium](https://github.com/ImranR98/Obtainium) at this repository
+          to be told when there is a new one.
+
+          The Play Store build is signed by Google and this one is signed by us, so Android treats
+          them as different apps and will not install either over the other. Moving between them
+          means uninstalling first: your notes are on the server, but the device forgets your vault
+          key and will ask for the vault password again.
+
+          EOF
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          name: Serble Notes ${{ needs.preflight.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body_path: notes.md
+          generate_release_notes: true
+          files: release/*
+          fail_on_unmatched_files: true

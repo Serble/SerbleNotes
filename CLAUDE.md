@@ -624,12 +624,36 @@ Three things this machine needs that are not in the repo, each failing in a way 
 - **Windows:** no supported cross-compile, so it builds in CI. `.github/workflows/clients.yml` builds
   Linux, Windows and Android from one commit and needs `VITE_API_BASE_URL` as a repository variable.
 
-### Releasing to Google Play
+### Releasing
 
-Pushing a `v*` tag builds every client and publishes the AAB to the **internal track**;
-`workflow_dispatch` builds without publishing unless asked. **A tag goes no further than internal,
-deliberately** - promoting means choosing a rollout percentage and writing release notes, which is a
-decision somebody makes in the Play Console.
+There are two channels and one button. **Bump `version` in `tauri.conf.json`, commit and push**, then
+run the Clients workflow from the Actions tab with **Create a GitHub release** and **Publish to Google
+Play** ticked as wanted. It reads that version, builds Linux, Windows and Android from the commit you
+pushed, uploads the AAB to Play and attaches the APK to a GitHub release.
+
+**Only the APK is released; the desktop bundles stay run artifacts**, which is where they were before
+there was a release at all. The release job downloads one named artifact and ships whatever is in it,
+so shipping desktop too is deleting that name - but it still waits on every client compiling.
+
+**The workflow creates the tag, and creates it last** - the release is what makes it, at the commit
+that was actually built. A tag naming a commit whose Windows build failed would be a lie, and tagging
+by hand beforehand means keeping a second copy of a version that already lives in `tauri.conf.json`.
+So there is deliberately **no `push: tags` trigger**; a hand-pushed tag does nothing.
+
+**Play goes no further than the track you pick, and `internal` is the default** - promoting means
+choosing a rollout percentage and writing release notes, which is a decision somebody makes in the
+Play Console.
+
+**The GitHub APK and the Play build are not interchangeable.** Play App Signing means Play hands out
+an app signed by Google's key while the APK here carries our upload key, so Android treats them as
+different apps and refuses to install either over the other. Moving between them means uninstalling,
+which costs the cached vault key and the per-device empty folders - the notes themselves are on the
+server. The generated release notes say so, on the page where somebody is about to download it.
+
+The APK is one universal file rather than per-architecture splits, and
+[Obtainium](https://github.com/ImranR98/Obtainium) pointed at the repository is how it updates itself.
+**F-Droid proper is not worth starting on**: they build on their own servers, where `wasm-pack` being
+an npm package that downloads a prebuilt binary is disqualifying, and they sign with a third key.
 
 Secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
 `PLAY_SERVICE_ACCOUNT_JSON`, and `ANDROID_KEY_PASSWORD` only for an older JKS keystore that really has
@@ -652,9 +676,11 @@ Four things that each cost a release to find out:
   about the package name is this, not the credentials.
 - **`versionCode` comes from `tauri.conf.json`** as `major * 1000000 + minor * 1000 + patch`, and Play
   never forgets one - including for a build that was rejected. So the version must be bumped before
-  every release and a re-run of a tag cannot publish. The workflow checks the tag against
-  `tauri.conf.json` **before compiling anything**, because the alternative is finding out after a
-  four-architecture build.
+  every release and re-running one cannot publish. The `preflight` job refuses a version whose tag
+  already exists, **before compiling anything**, because the alternative is finding out after a
+  four-architecture build. Play is uploaded to before the tag is written, so a run that fails after
+  that step leaves a version Play has seen and git has not - it is spent either way, and the next run
+  has to be a new one.
 - **The mapping file is uploaded with it**, or every crash report from a real phone is obfuscated.
 
 ## Working agreements
