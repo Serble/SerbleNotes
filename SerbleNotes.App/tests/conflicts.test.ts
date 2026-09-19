@@ -4,8 +4,9 @@
  * This belongs in the small set of client code that can be *wrong* rather than visibly broken. It
  * rewrites the user's text, and its bugs are the quiet kind: a region parsed one line short takes a
  * line of somebody's prose away with the markers, and a region drawn over an unclosed marker
- * swallows the rest of the note. The widget that draws them is DOM and is not tested here - see the
- * note in CLAUDE.md about jsdom.
+ * swallows the rest of the note. The widget that draws them is DOM and is not tested here: jsdom
+ * goes no further than `tests/support/dom.ts`, and a widget proved against a second-hand DOM is not
+ * proved against a browser.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

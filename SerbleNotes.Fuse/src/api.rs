@@ -1,7 +1,8 @@
 //! The backend, as this client sees it.
 //!
-//! Every route here is one from the table in CLAUDE.md, and every `payload`, `name` and `label`
-//! crossing this module is ciphertext the server cannot read and neither can this file. Nothing in
+//! Every route here is one the web client already calls - this client adds none - and every
+//! `payload`, `name` and `label` crossing this module is ciphertext the server cannot read and
+//! neither can this file. Nothing in
 //! here decrypts anything; that is `store.rs`, through the core.
 //!
 //! [`Backend`] is a trait rather than a struct so the tests can drive the whole of `store.rs` and
@@ -33,8 +34,8 @@ pub struct Vault {
     pub owner_id: String,
     pub encrypted: bool,
     /// The vault key sealed under the vault password, or - for an unencrypted vault - the key
-    /// itself, in the clear. See CLAUDE.md: such a vault is not private from the server, and this
-    /// client must never say otherwise.
+    /// itself, in the clear. Such a vault is not private from the server, and this client must
+    /// never say otherwise.
     pub wrapped_key: String,
     pub kdf_salt: Option<String>,
     pub kdf_params: Option<String>,

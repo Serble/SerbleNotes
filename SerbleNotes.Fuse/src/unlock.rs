@@ -93,10 +93,11 @@ pub enum PasswordSource {
 
 /// Which of them applies, in order.
 ///
-/// **An empty password is a real password**, and no level here may treat one as absent - that is
-/// the "Inform, never forbid" rule from CLAUDE.md reaching this far down. A vault whose password is
-/// the empty string is badly protected and still end-to-end encrypted, and a client that quietly
-/// turned `--password ''` into a prompt would make it impossible to open one without a terminal.
+/// **An empty password is a real password**, and no level here may treat one as absent. What a
+/// vault is worth is the user's call, so this product warns and never refuses - and that reaches
+/// this far down. A vault whose password is the empty string is badly protected and still
+/// end-to-end encrypted, and a client that quietly turned `--password ''` into a prompt would make
+/// it impossible to open one without a terminal.
 ///
 /// This is why the environment variable is read with `.ok()` and never filtered for emptiness, and
 /// why it differs from the server and the session above it, where empty genuinely does mean unset.
@@ -134,8 +135,8 @@ pub fn describe_privacy(vault: &Vault) -> &'static str {
 /// **A file, not the system keychain.** The desktop app uses Secret Service, Credential Manager or
 /// Keychain, and this does not - a mount usually runs on a machine with no session bus to talk to,
 /// and a keychain that cannot be reached is worse than a file, because it makes the promise and
-/// then does not keep it. Saying which it is, rather than implying the stronger one, is the rule in
-/// CLAUDE.md and this is the sentence that keeps it.
+/// then does not keep it. Saying which it is, rather than implying the stronger one, is the rule
+/// everywhere in this product, and this is the sentence that keeps it here.
 pub fn describe_key_storage() -> String {
     format!(
         "The key is kept in {} (readable only by you), not in a system keychain. \
@@ -321,7 +322,7 @@ mod tests {
 
     #[test]
     fn where_the_key_is_kept_is_said_plainly_and_not_dressed_up() {
-        // The rule from CLAUDE.md: say which it is, never imply the stronger one.
+        // Say which it is, never imply the stronger one.
         let said = describe_key_storage();
         assert!(said.contains("not in a system keychain"), "{said}");
         assert!(said.contains("keys.json"), "{said}");

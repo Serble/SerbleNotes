@@ -7,7 +7,8 @@
 # back. The build never reads them - it writes them - so nothing else is affected.
 /gen/schemas/
 
-# Signing material must never be committed. See the release notes in CLAUDE.md.
+# Signing material must never be committed. Committing one of these cannot be undone by deleting
+# the file afterwards - the history keeps it, and the key has to be replaced.
 *.keystore
 *.jks
 keystore.properties

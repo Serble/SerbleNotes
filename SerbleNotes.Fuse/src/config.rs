@@ -7,7 +7,7 @@
 //! - **Unlocked vault keys**, in the data directory, also 0600. **This is a file, not the system
 //!   keychain, and this client says so wherever it offers to remember one.** The desktop and
 //!   Android apps use the keychain where there is one and a 0600 file on Android where there is
-//!   not; the rule from CLAUDE.md is that we say which it is and never imply the stronger one. A
+//!   not; the rule everywhere is to say which it is and never imply the stronger one. A
 //!   long-running mount on a headless machine is the main thing this tool is for, and a headless
 //!   machine usually has no Secret Service to talk to, so a file it is - and `forget` exists.
 //! - **Cached ciphertext and unsent edits**, in the cache directory, which is `cache.rs`.

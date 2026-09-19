@@ -18,7 +18,8 @@ path = "src/main.rs"
 
 [dependencies]
 # The only door to crypto, diffing, replay, merging and note paths. Nothing in this crate
-# reimplements any of it - see the working agreements in CLAUDE.md.
+# reimplements any of it: that logic lives in the core alone, which is what stops this filesystem
+# and the apps ever disagreeing about what a stored version means.
 serblenotes-core = { path = "../SerbleNotes.Core" }
 
 # default-features = false leaves out the `libfuse` feature, so building this needs no libfuse

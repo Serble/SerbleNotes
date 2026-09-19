@@ -82,7 +82,7 @@ export function socketUrl(path: string): string {
  * On the web that is a page in this app. A native app has no pages and no origin worth redirecting
  * to, so it registers a URL scheme with the operating system and gets handed the whole URL instead.
  * Serble checks the redirect against the list on the app registration, so the scheme below has to be
- * listed there too - see CLAUDE.md.
+ * listed there too, or sign-in fails with `redirect-uri-mismatch` before the consent screen.
  */
 export const NATIVE_SCHEME = 'serblenotes';
 

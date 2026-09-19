@@ -15,10 +15,11 @@ name: Clients
 # without it shows "this build is incomplete" on the sign-in screen. The Serble application id comes
 # from that server once the app can reach it, so there is nothing else to configure for a build.
 #
-# Publishing to Google Play needs four secrets for the signing key and one for the API, all listed
-# under "Releasing" in CLAUDE.md. Without them this workflow still builds - it falls back to the
-# debug APK it built before there was a key - so a fork, or a clone with no secrets set, is not a
-# workflow that fails.
+# Publishing to Google Play needs the signing key as ANDROID_KEYSTORE_BASE64,
+# ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and - only for an older JKS keystore that really has
+# a separate key password - ANDROID_KEY_PASSWORD, plus PLAY_SERVICE_ACCOUNT_JSON for the API.
+# Without them this workflow still builds - it falls back to the debug APK it built before there was
+# a key - so a fork, or a clone with no secrets set, is not a workflow that fails.
 #
 # Play goes no further than the track chosen here, and `internal` is the default. Promoting a build
 # to production stays a decision somebody makes in the Play Console, in front of the release notes

@@ -256,7 +256,7 @@ const answers = {
       .map((version) => (bodies ? { ...version } : { ...version, payload: null }));
 
     // The highest cursor *in the rows returned*, never the vault's own - reporting the vault's would
-    // skip a write that landed between the two queries. See CLAUDE.md, "Sync cursor".
+    // skip a write that landed between the two queries. The real server answers the same way.
     const highest = Math.max(
       since,
       ...changedNotes.map((note) => note.cursor),

@@ -841,9 +841,9 @@ export class VaultStore {
     // A note deleted on another device is still a row here, with a head and a readable history, so
     // every part of a save works perfectly and the text lands somewhere nothing can ever show it
     // again: the tree is built from `listNotes`, which filters tombstones out. The user is told
-    // their note was saved, and it is gone. Refusing is the only honest answer, and this is the
-    // kind of accident the user cannot perceive - see "Inform, never forbid" in CLAUDE.md, which
-    // exempts exactly that.
+    // their note was saved, and it is gone. Refusing is the only honest answer: this product warns
+    // rather than forbids, and the one exception is an accident the user cannot perceive, which is
+    // exactly what this is.
     if (this.notes.get(noteId)?.deleted) {
       throw new Error(
         'This note was deleted on another device, so there is nowhere to save to. Copy anything ' +

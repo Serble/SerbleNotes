@@ -59,9 +59,9 @@ export function textIcon(size = 14): SVGElement {
 /**
  * Two panes side by side: the mark for the conflict card, and the way back to it.
  *
- * Only two strokes plus the boxes, because at 14px anything busier fills in solid at this weight -
- * see the note on icon weight in CLAUDE.md. It has no twin in `Icons.tsx`: nothing in React draws
- * a conflict, and a copy nobody renders is a copy that goes stale.
+ * Only two strokes plus the boxes, because at 14px anything busier fills in solid at the 2.2 weight
+ * every icon here is drawn on. It has no twin in `Icons.tsx`: nothing in React draws a conflict, and
+ * a copy nobody renders is a copy that goes stale.
  */
 export function choicesIcon(size = 14): SVGElement {
   const element = svg(size);

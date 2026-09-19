@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
-  "_comment": "The client's tests are node's own runner rather than one Stryker has a plugin for, so the command runner is the only option - and it has no per-test coverage analysis, meaning it reruns the whole command for every single mutant. scripts/mutation-tests.sh is that command; set STRYKER_TESTS to narrow a run to the tests that could kill the mutants being made. See the mutation testing section of CLAUDE.md.",
+  "_comment": "The client's tests are node's own runner rather than one Stryker has a plugin for, so the command runner is the only option - and it has no per-test coverage analysis, meaning it reruns the whole command for every single mutant. scripts/mutation-tests.sh is that command; set STRYKER_TESTS to narrow a run to the tests that could kill the mutants being made.",
   "packageManager": "npm",
   "testRunner": "command",
   "commandRunner": {
