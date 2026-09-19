@@ -172,7 +172,13 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # `packages` is named because the action's default is "tools platform-tools", and `tools` is
+      # the obsolete SDK package Google has removed from the repository - so taking the default
+      # fails the job with "Failed to find package 'tools'" before anything is built. Nothing here
+      # wanted it: the NDK is installed by the step below and Gradle fetches the rest itself.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install the NDK
         run: sdkmanager --install "ndk;27.1.12297006"
